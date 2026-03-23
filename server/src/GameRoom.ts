@@ -99,8 +99,11 @@ function canWalk(tx: number, ty: number): boolean {
 }
 
 function dist(x1: number, y1: number, x2: number, y2: number): number {
-  return Math.abs(Math.round(x1 / TILE_SIZE) - Math.round(x2 / TILE_SIZE)) +
-         Math.abs(Math.round(y1 / TILE_SIZE) - Math.round(y2 / TILE_SIZE));
+  // Chebyshev distance — diagonals count as 1
+  return Math.max(
+    Math.abs(Math.round(x1 / TILE_SIZE) - Math.round(x2 / TILE_SIZE)),
+    Math.abs(Math.round(y1 / TILE_SIZE) - Math.round(y2 / TILE_SIZE))
+  );
 }
 
 export class GameRoom extends Room<GameState> {
@@ -369,7 +372,7 @@ export class GameRoom extends Room<GameState> {
         let closestDist = Infinity;
         this.state.players.forEach((p, sid) => {
           if (p.hp <= 0) return;
-          const d = Math.abs(Math.round(p.x / TILE_SIZE) - wtx) + Math.abs(Math.round(p.y / TILE_SIZE) - wty);
+          const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - wtx), Math.abs(Math.round(p.y / TILE_SIZE) - wty));
           if (d <= WOLF_CHASE_RANGE && d < closestDist) {
             closest = p;
             closestSid = sid;
@@ -381,7 +384,7 @@ export class GameRoom extends Room<GameState> {
         if (!closest && wolf.targetPlayerId) {
           const tracked = this.state.players.get(wolf.targetPlayerId);
           if (tracked && tracked.hp > 0) {
-            const d = Math.abs(Math.round(tracked.x / TILE_SIZE) - wtx) + Math.abs(Math.round(tracked.y / TILE_SIZE) - wty);
+            const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - wtx), Math.abs(Math.round(tracked.y / TILE_SIZE) - wty));
             if (d <= WOLF_LEASH_RANGE) {
               closest = tracked;
               closestSid = wolf.targetPlayerId;
