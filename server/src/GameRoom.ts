@@ -22,6 +22,12 @@ function levelFromXp(xp: number): number {
   while (xpForLevel(lvl + 1) <= xp) lvl++;
   return lvl;
 }
+// Protection zone check (temple tiles)
+function isProtectionZone(x: number, y: number): boolean {
+  const tx = Math.round(x / TILE_SIZE);
+  const ty = Math.round(y / TILE_SIZE);
+  return WORLD_MAP[ty]?.[tx] === TILE.TEMPLE;
+}
 const PLAYER_RESPAWN_MS = 5000;
 const SPAWN_TILE_X = 36;
 const SPAWN_TILE_Y = 43; // Inside the temple
@@ -354,6 +360,8 @@ export class GameRoom extends Room<GameState> {
     // Try player target (PvP)
     const target = this.state.players.get(player.targetId);
     if (target && target.hp > 0) {
+      // No PvP in protection zone
+      if (isProtectionZone(px, py) || isProtectionZone(target.x, target.y)) return;
       const d = dist(px, py, target.x, target.y);
       if (d > cfg.range) {
         return;
@@ -503,6 +511,8 @@ export class GameRoom extends Room<GameState> {
 
         // Attack if adjacent
         if (closestDist <= WOLF_ATTACK_RANGE) {
+          // Don't attack players in protection zone
+          if (isProtectionZone(closest.x, closest.y)) return;
           const last = wolfLastAttack.get(wolf.id) || 0;
           if (now - last >= WOLF_ATTACK_INTERVAL_MS) {
             wolfLastAttack.set(wolf.id, now);
@@ -555,8 +565,9 @@ export class GameRoom extends Room<GameState> {
             return;
           }
 
-          // Attack if in range
+          // Attack if in range (not in protection zone)
           if (d <= SLIME_ATTACK_RANGE) {
+            if (isProtectionZone(target.x, target.y)) return;
             const last = slimeLastAttack.get(slimeId) || 0;
             if (now - last >= SLIME_ATTACK_INTERVAL_MS) {
               slimeLastAttack.set(slimeId, now);
@@ -676,7 +687,11 @@ export class GameRoom extends Room<GameState> {
         lastMoveTime.set(client.sessionId, now);
         return;
       }
-      if (this.isTileOccupiedByPlayer(newX, newY, client.sessionId)) {
+      // Allow player overlap in protection zone (temple)
+      const destTx = Math.round(newX / TILE_SIZE);
+      const destTy = Math.round(newY / TILE_SIZE);
+      const destIsTemple = WORLD_MAP[destTy]?.[destTx] === TILE.TEMPLE;
+      if (!destIsTemple && this.isTileOccupiedByPlayer(newX, newY, client.sessionId)) {
         lastMoveTime.set(client.sessionId, now);
         return;
       }
@@ -847,9 +862,10 @@ export class GameRoom extends Room<GameState> {
         return;
       }
 
-      // Check player target (PvP)
+      // Check player target (PvP) — no PvP in protection zone
       const target = this.state.players.get(player.targetId);
       if (target && target.hp > 0) {
+        if (isProtectionZone(px, py) || isProtectionZone(target.x, target.y)) return;
         const d = dist(px, py, target.x, target.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
@@ -913,9 +929,10 @@ export class GameRoom extends Room<GameState> {
         }
       });
 
-      // Hit all adjacent players
-      this.state.players.forEach((target, sid) => {
+      // Hit all adjacent players (no PvP in protection zone)
+      if (!isProtectionZone(px, py)) this.state.players.forEach((target, sid) => {
         if (sid === client.sessionId || target.hp <= 0) return;
+        if (isProtectionZone(target.x, target.y)) return;
         const d = dist(px, py, target.x, target.y);
         if (d > 1) return;
         const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
