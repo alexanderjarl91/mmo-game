@@ -189,6 +189,26 @@ export class GameRoom extends Room<GameState> {
   }
 
   respawnPlayer(player: PlayerState) {
+    // Death penalty — Tibia style
+    const level = levelFromXp(player.xp);
+    if (level < 24) {
+      // Levels 1-23: lose 10% of total XP
+      const loss = Math.floor(player.xp * 0.10);
+      player.xp = Math.max(0, player.xp - loss);
+    } else {
+      // Level 24+: lose ((level + 50) / 100) * 50(level² - 5*level + 8)
+      const loss = Math.floor(((level + 50) / 100) * 50 * (level * level - 5 * level + 8));
+      player.xp = Math.max(0, player.xp - loss);
+    }
+
+    // Recalculate level after XP loss (may delevel)
+    const newLevel = levelFromXp(player.xp);
+    const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+    player.level = newLevel;
+    player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
+    player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
+    player.attack = cfg.attackBase + (newLevel - 1) * 5;
+
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;
     player.hp = player.maxHp;
