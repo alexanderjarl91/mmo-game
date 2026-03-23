@@ -180,24 +180,20 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         const px = tx * TILE_SIZE, py = ty * TILE_SIZE;
         const tile = map[ty]?.[tx] ?? 0;
 
-        // Base grass (with slight variation)
-        const variant = ((tx * 7 + ty * 13) % 4);
+        // Base grass — row 0 col 0 is solid opaque green grass
         if (plains) {
-          if (variant === 0) drawTile(plains, 16, 64, px, py); // grass variant
-          else drawTile(plains, 0, 64, px, py); // base grass
+          drawTile(plains, 0, 0, px, py);
         } else {
           ctx.fillStyle = "#4a7a2e"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
         }
 
         switch (tile) {
           case TILE.PATH:
-            if (plains) drawTile(plains, 32, 144, px, py); // cobblestone
+            if (plains) drawTile(plains, 64, 144, px, py); // cobblestone
             break;
           case TILE.WATER:
+            // Blue water with subtle animation
             ctx.fillStyle = "#2855a0"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.fillStyle = "rgba(60,140,220,0.4)";
-            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            // Water ripple detail
             ctx.strokeStyle = "rgba(120,180,255,0.3)"; ctx.lineWidth = 1;
             const wo = ((tx + ty) * 13) % 20;
             ctx.beginPath(); ctx.moveTo(px + 8, py + 20 + wo % 8);
@@ -206,24 +202,15 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
             break;
           case TILE.TREE:
             if (objects) {
-              // Draw tree from objects.png (~48x56 tree at x=48, y=88)
               drawObj(objects, 48, 88, 40, 48, px - 16, py - 48, 96, 112);
-            } else {
-              ctx.fillStyle = "#2d5a1e"; ctx.beginPath();
-              ctx.arc(px + 32, py + 20, 28, 0, Math.PI * 2); ctx.fill();
             }
             break;
           case TILE.ROCK:
             if (objects) {
-              // Rock from objects.png (x=0, y=0, 16x16)
               drawObj(objects, 0, 0, 16, 16, px + 8, py + 8, 48, 48);
-            } else {
-              ctx.fillStyle = "#666"; ctx.beginPath();
-              ctx.ellipse(px + 32, py + 36, 22, 16, 0, 0, Math.PI * 2); ctx.fill();
             }
             break;
           case TILE.FLOWERS:
-            // Grass + flower overlay
             if (objects) {
               drawObj(objects, 128, 56, 8, 8, px + 16, py + 16, 32, 32);
             }
@@ -237,18 +224,23 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
             }
             break;
           case TILE.WALL:
-            if (walls) {
-              // Brown wall from walls.png
-              drawTile(walls, 48, 16, px, py);
-            } else {
-              ctx.fillStyle = "#795548"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            // Dark solid wall — use hand-drawn bricks style
+            ctx.fillStyle = "#5a4030"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = "#3d2a1e"; ctx.lineWidth = 1;
+            // Brick pattern
+            for (let by = 0; by < 4; by++) {
+              const brickY = py + by * 16;
+              ctx.strokeRect(px, brickY, TILE_SIZE, 16);
+              const off = (by % 2) * 32;
+              ctx.beginPath(); ctx.moveTo(px + 32 + off, brickY); ctx.lineTo(px + 32 + off, brickY + 16); ctx.stroke();
             }
             break;
           case TILE.FLOOR:
-            if (plains) {
-              drawTile(plains, 48, 64, px, py); // dirt tile as floor
-            } else {
-              ctx.fillStyle = "#A1887F"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            if (wooden) {
+              // Wooden floor for building interiors
+              drawTile(wooden, 0, 0, px, py);
+            } else if (plains) {
+              drawTile(plains, 64, 0, px, py); // dirt as fallback
             }
             break;
         }
