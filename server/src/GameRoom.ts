@@ -2,6 +2,7 @@ import { Room, Client } from "@colyseus/core";
 import { Schema, MapSchema, type } from "@colyseus/schema";
 import { PlayerState } from "./PlayerState";
 import { SlimeState } from "./SlimeState";
+import { WolfState } from "./WolfState";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
 
 const TILE_SIZE = 64;
@@ -25,6 +26,17 @@ const COLORS = [
   "#1abc9c", "#e67e22", "#e91e63", "#00bcd4", "#ff5722",
   "#8bc34a", "#ffc107", "#673ab7", "#03a9f4", "#ff9800",
 ];
+
+// Wolf config
+const WOLF_HP = 150;
+const WOLF_ATK = 20;
+const WOLF_XP = 75;
+const WOLF_CHASE_RANGE = 6; // tiles — aggro radius
+const WOLF_ATTACK_RANGE = 1; // melee
+const WOLF_MOVE_INTERVAL_MS = 600; // faster than slimes
+const WOLF_ATTACK_INTERVAL_MS = 1500;
+const WOLF_RESPAWN_MS = 30000;
+const WOLF_SPAWN_COUNT = 8;
 
 const SLIME_TYPES = [
   { color: "#2ecc71", size: "small", hp: 30, xp: 15, name: "Green Slime" },
@@ -71,6 +83,7 @@ initSlimeSpawns();
 export class GameState extends Schema {
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
   @type({ map: SlimeState }) slimes = new MapSchema<SlimeState>();
+  @type({ map: WolfState }) wolves = new MapSchema<WolfState>();
 }
 
 function canWalk(tx: number, ty: number): boolean {
@@ -178,6 +191,63 @@ export class GameRoom extends Room<GameState> {
       return;
     }
 
+    // Try wolf target
+    const wolf = this.state.wolves.get(player.targetId);
+    if (wolf && wolf.alive) {
+      const d = dist(px, py, wolf.x, wolf.y);
+      if (d > cfg.range) {
+        if (player.playerClass === "warrior") player.targetId = "";
+        return;
+      }
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      wolf.hp = Math.max(0, wolf.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", {
+          fromX: px + TILE_SIZE / 2, fromY: py,
+          toX: wolf.x + TILE_SIZE / 2, toY: wolf.y,
+          attackerId: client.sessionId,
+        });
+      }
+
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+
+      if (wolf.hp <= 0) {
+        wolf.alive = false;
+        const wolfId = player.targetId;
+        player.targetId = "";
+
+        const xpGain = WOLF_XP;
+        player.xp += xpGain;
+
+        const newLevel = Math.floor(player.xp / XP_PER_LEVEL) + 1;
+        if (newLevel > player.level) {
+          player.level = newLevel;
+          player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
+          player.hp = player.maxHp;
+          player.attack = cfg.attackBase + (newLevel - 1) * 5;
+          this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
+        }
+
+        this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+
+        // Find spawn index
+        const wIdx = parseInt(wolfId.split("_")[1]) || 0;
+        this.clock.setTimeout(() => {
+          const spawns = (this as any)._wolfSpawns;
+          const spawn = spawns?.[wIdx];
+          if (spawn) {
+            wolf.x = spawn.x * TILE_SIZE;
+            wolf.y = spawn.y * TILE_SIZE;
+            wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP;
+            wolf.alive = true;
+            wolf.targetPlayerId = "";
+          }
+        }, WOLF_RESPAWN_MS);
+      }
+      return;
+    }
+
     // Try player target (PvP)
     const target = this.state.players.get(player.targetId);
     if (target && target.hp > 0) {
@@ -247,6 +317,134 @@ export class GameRoom extends Room<GameState> {
       slime.alive = true;
       this.state.slimes.set(slime.id, slime);
     });
+
+    // Spawn wolves in forest areas (away from village)
+    const wolfSpawns: { x: number; y: number }[] = [];
+    for (let attempt = 0; attempt < 200 && wolfSpawns.length < WOLF_SPAWN_COUNT; attempt++) {
+      const wx = Math.floor(Math.random() * MAP_W);
+      const wy = Math.floor(Math.random() * MAP_H);
+      // Not in village zone, walkable, not water
+      if (wx >= 24 && wx <= 48 && wy >= 24 && wy <= 48) continue;
+      if (!canWalk(wx, wy)) continue;
+      // Some distance from other wolves
+      if (wolfSpawns.some(w => Math.abs(w.x - wx) + Math.abs(w.y - wy) < 4)) continue;
+      wolfSpawns.push({ x: wx, y: wy });
+    }
+    (this as any)._wolfSpawns = wolfSpawns;
+    wolfSpawns.forEach((spawn, i) => {
+      const wolf = new WolfState();
+      wolf.id = `wolf_${i}`;
+      wolf.x = spawn.x * TILE_SIZE;
+      wolf.y = spawn.y * TILE_SIZE;
+      wolf.hp = WOLF_HP;
+      wolf.maxHp = WOLF_HP;
+      wolf.alive = true;
+      this.state.wolves.set(wolf.id, wolf);
+    });
+
+    // Wolf AI — chase & attack
+    const wolfLastAttack = new Map<string, number>();
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.wolves.forEach((wolf) => {
+        if (!wolf.alive) return;
+        const wtx = Math.round(wolf.x / TILE_SIZE);
+        const wty = Math.round(wolf.y / TILE_SIZE);
+
+        // Find closest player in range
+        let closest: PlayerState | null = null;
+        let closestSid = "";
+        let closestDist = Infinity;
+        this.state.players.forEach((p, sid) => {
+          if (p.hp <= 0) return;
+          const d = Math.abs(Math.round(p.x / TILE_SIZE) - wtx) + Math.abs(Math.round(p.y / TILE_SIZE) - wty);
+          if (d <= WOLF_CHASE_RANGE && d < closestDist) {
+            closest = p;
+            closestSid = sid;
+            closestDist = d;
+          }
+        });
+
+        // If we have a target from aggro, keep chasing even if out of initial range
+        if (!closest && wolf.targetPlayerId) {
+          const tracked = this.state.players.get(wolf.targetPlayerId);
+          if (tracked && tracked.hp > 0) {
+            const d = Math.abs(Math.round(tracked.x / TILE_SIZE) - wtx) + Math.abs(Math.round(tracked.y / TILE_SIZE) - wty);
+            if (d <= WOLF_CHASE_RANGE + 3) { // leash range slightly bigger
+              closest = tracked;
+              closestSid = wolf.targetPlayerId;
+              closestDist = d;
+            }
+          }
+        }
+
+        if (!closest) {
+          wolf.targetPlayerId = "";
+          // Random wander when no target
+          if (Math.random() > 0.3) return;
+          const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nx = wolf.x + dir.dx * TILE_SIZE;
+          const ny = wolf.y + dir.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) return;
+          if (ntx >= 28 && ntx <= 44 && nty >= 28 && nty <= 44) return; // don't enter village
+          wolf.x = nx;
+          wolf.y = ny;
+          return;
+        }
+
+        wolf.targetPlayerId = closestSid;
+
+        // Attack if adjacent
+        if (closestDist <= WOLF_ATTACK_RANGE) {
+          const last = wolfLastAttack.get(wolf.id) || 0;
+          if (now - last >= WOLF_ATTACK_INTERVAL_MS) {
+            wolfLastAttack.set(wolf.id, now);
+            const damage = WOLF_ATK + Math.floor(Math.random() * 8);
+            closest.hp = Math.max(0, closest.hp - damage);
+            this.broadcast("hit", {
+              targetId: closestSid,
+              damage,
+              x: closest.x + TILE_SIZE / 2,
+              y: closest.y,
+              attackerId: wolf.id,
+            });
+            if (closest.hp <= 0) {
+              wolf.targetPlayerId = "";
+              this.broadcast("kill", { targetId: closestSid, killerId: wolf.id, killerName: "Wolf", xp: 0 });
+              this.clock.setTimeout(() => { this.respawnPlayer(closest!); }, PLAYER_RESPAWN_MS);
+            }
+          }
+          return;
+        }
+
+        // Chase — move toward player
+        const ptx = Math.round(closest.x / TILE_SIZE);
+        const pty = Math.round(closest.y / TILE_SIZE);
+        const dx = ptx - wtx;
+        const dy = pty - wty;
+        // Prefer the axis with larger distance
+        const moves: { dx: number; dy: number }[] = [];
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          if (dx !== 0) moves.push({ dx: Math.sign(dx), dy: 0 });
+          if (dy !== 0) moves.push({ dx: 0, dy: Math.sign(dy) });
+        } else {
+          if (dy !== 0) moves.push({ dx: 0, dy: Math.sign(dy) });
+          if (dx !== 0) moves.push({ dx: Math.sign(dx), dy: 0 });
+        }
+        for (const m of moves) {
+          const nx = wolf.x + m.dx * TILE_SIZE;
+          const ny = wolf.y + m.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) continue;
+          if (ntx >= 28 && ntx <= 44 && nty >= 28 && nty <= 44) continue;
+          wolf.x = nx;
+          wolf.y = ny;
+          break;
+        }
+      });
+    }, WOLF_MOVE_INTERVAL_MS);
 
     // Slime AI
     this.clock.setInterval(() => {

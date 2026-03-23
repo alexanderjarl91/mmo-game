@@ -30,6 +30,15 @@ interface SlimeData {
   hitTime: number; // for flash effect
 }
 
+interface WolfData {
+  displayX: number; displayY: number;
+  serverX: number; serverY: number;
+  hp: number; maxHp: number;
+  alive: boolean;
+  targetPlayerId: string;
+  hitTime: number;
+}
+
 interface ChatBubble { sessionId: string; message: string; time: number; }
 interface EmoteBubble { sessionId: string; emote: string; time: number; }
 interface NPCData { id: string; x: number; y: number; name: string; color: string; direction: string; dialogue: string[]; }
@@ -61,6 +70,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   const roomRef = useRef<Room | null>(null);
   const playersRef = useRef<Map<string, PlayerData>>(new Map());
   const slimesRef = useRef<Map<string, SlimeData>>(new Map());
+  const wolvesRef = useRef<Map<string, WolfData>>(new Map());
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
   const [connected, setConnected] = useState(false);
@@ -264,10 +274,21 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
             time: performance.now(),
           });
         }
+        const wolf = wolvesRef.current.get(data.targetId);
+        if (wolf) {
+          wolf.hitTime = performance.now();
+          damageNumbersRef.current.push({
+            x: wolf.displayX + TILE_SIZE / 2,
+            y: wolf.displayY,
+            damage: data.damage,
+            time: performance.now(),
+          });
+        }
       });
 
-      room.onMessage("kill", (data: { killerName: string; xp: number }) => {
-        killFeedRef.current.push({ text: `${data.killerName} slayed a slime! (+${data.xp} XP)`, time: performance.now() });
+      room.onMessage("kill", (data: { killerName: string; xp: number; targetId?: string }) => {
+        const isWolf = data.targetId?.startsWith("wolf_");
+        killFeedRef.current.push({ text: `${data.killerName} slayed a ${isWolf ? "wolf" : "slime"}! (+${data.xp} XP)`, time: performance.now() });
         if (killFeedRef.current.length > 5) killFeedRef.current.shift();
       });
 
@@ -365,6 +386,29 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       });
       room.state.slimes.onRemove((_: any, id: string) => { slimesRef.current.delete(id); });
 
+      // Wolves
+      room.state.wolves.onAdd((wolf: any, id: string) => {
+        const data: WolfData = {
+          displayX: wolf.x, displayY: wolf.y,
+          serverX: wolf.x, serverY: wolf.y,
+          hp: wolf.hp, maxHp: wolf.maxHp,
+          alive: wolf.alive,
+          targetPlayerId: wolf.targetPlayerId || "",
+          hitTime: 0,
+        };
+        wolvesRef.current.set(id, data);
+        wolf.onChange(() => {
+          const w = wolvesRef.current.get(id);
+          if (!w) return;
+          w.displayX = wolf.x; w.displayY = wolf.y;
+          w.serverX = wolf.x; w.serverY = wolf.y;
+          w.hp = wolf.hp; w.maxHp = wolf.maxHp;
+          w.alive = wolf.alive;
+          w.targetPlayerId = wolf.targetPlayerId || "";
+        });
+      });
+      room.state.wolves.onRemove((_: any, id: string) => { wolvesRef.current.delete(id); });
+
       room.onLeave(() => { if (!cancelled) setConnected(false); });
     }).catch((err) => { if (!cancelled) setError(err.message || "Failed to connect"); });
 
@@ -400,6 +444,15 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       const sx = s.displayX + TILE_SIZE / 2;
       const sy = s.displayY + TILE_SIZE / 2;
       const d = Math.sqrt((worldX - sx) ** 2 + (worldY - sy) ** 2);
+      if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
+    });
+
+    // Check wolves
+    wolvesRef.current.forEach((wolf, id) => {
+      if (!wolf.alive) return;
+      const wx = wolf.displayX + TILE_SIZE / 2;
+      const wy = wolf.displayY + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - wx) ** 2 + (worldY - wy) ** 2);
       if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
     });
 
@@ -631,6 +684,82 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         }
       });
 
+      /* ── Wolves ─────────────────────────────────────── */
+
+      wolvesRef.current.forEach((wolf, wolfId) => {
+        if (!wolf.alive) return;
+        const wx = wolf.displayX + TILE_SIZE / 2 - camX;
+        const wy = wolf.displayY + TILE_SIZE / 2 - camY;
+        if (wx < -80 || wx > w + 80 || wy < -80 || wy > h + 80) return;
+
+        const isWolfTargeted = myTargetId === wolfId;
+
+        // Target highlight
+        if (isWolfTargeted) {
+          const pulse = 0.5 + Math.sin(time / 200) * 0.3;
+          ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(wx - 24, wy - 20, 48, 44);
+        }
+
+        // Shadow
+        ctx.beginPath(); ctx.ellipse(wx, wy + 16, 16, 5, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+
+        // Wolf body — a dark gray canine shape
+        ctx.save();
+        // Flash red on hit
+        const wolfHitFlash = wolf.hitTime && (now - wolf.hitTime < 200);
+        if (wolfHitFlash) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
+
+        // Body (elongated oval)
+        ctx.fillStyle = "#4a4a4a";
+        ctx.beginPath();
+        ctx.ellipse(wx, wy - 2, 20, 14, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head
+        ctx.beginPath();
+        ctx.ellipse(wx + 14, wy - 10, 10, 9, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Ears
+        ctx.fillStyle = "#3a3a3a";
+        ctx.beginPath(); ctx.moveTo(wx + 16, wy - 18); ctx.lineTo(wx + 12, wy - 26); ctx.lineTo(wx + 22, wy - 18); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(wx + 20, wy - 18); ctx.lineTo(wx + 18, wy - 26); ctx.lineTo(wx + 26, wy - 18); ctx.fill();
+
+        // Eyes (red glow)
+        ctx.fillStyle = wolfHitFlash ? "#fff" : "#ff3333";
+        ctx.beginPath(); ctx.arc(wx + 18, wy - 12, 2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(wx + 12, wy - 12, 2, 0, Math.PI * 2); ctx.fill();
+
+        // Tail
+        ctx.strokeStyle = "#4a4a4a"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(wx - 18, wy - 2);
+        ctx.quadraticCurveTo(wx - 26, wy - 16, wx - 22, wy - 20);
+        ctx.stroke();
+
+        // Legs
+        ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 3;
+        const legBounce = Math.sin(time / 150) * 3;
+        ctx.beginPath(); ctx.moveTo(wx - 10, wy + 10); ctx.lineTo(wx - 12, wy + 18 + legBounce); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx - 4, wy + 10); ctx.lineTo(wx - 2, wy + 18 - legBounce); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx + 6, wy + 10); ctx.lineTo(wx + 4, wy + 18 + legBounce); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx + 12, wy + 10); ctx.lineTo(wx + 14, wy + 18 - legBounce); ctx.stroke();
+
+        ctx.restore();
+
+        // Name
+        ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("🐺 Wolf", wx + 1, wy - 29);
+        ctx.fillStyle = "#ff6b6b"; ctx.fillText("🐺 Wolf", wx, wy - 30);
+
+        // HP bar
+        if (wolf.hp < wolf.maxHp || isWolfTargeted) {
+          drawHPBar(ctx, wx, wy - 36, wolf.hp, wolf.maxHp, 40);
+        }
+      });
+
       /* ── NPCs ────────────────────────────────────────── */
 
       for (const npc of npcsRef.current) {
@@ -681,10 +810,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           let frame = 0;
           if (p.moveStartTime > 0 || p.moving) frame = Math.floor(time / ANIM_SPEED) % (WALK_FRAMES - 1) + 1;
           ctx.drawImage(sprite, frame * SPRITE_W, row * SPRITE_H, SPRITE_W, SPRITE_H, px - 48, py - 56, 96, 96);
-          if (sid === sessionIdRef.current) {
-            ctx.beginPath(); ctx.ellipse(px, py + 16, 22, 8, 0, 0, Math.PI * 2);
-            ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 2; ctx.stroke();
-          }
+
         } else {
           ctx.beginPath(); ctx.arc(px, py, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
         }
