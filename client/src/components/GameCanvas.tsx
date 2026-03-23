@@ -46,7 +46,7 @@ interface ChatBubble { sessionId: string; message: string; time: number; }
 interface EmoteBubble { sessionId: string; emote: string; time: number; }
 interface NPCData { id: string; x: number; y: number; name: string; color: string; direction: string; dialogue: string[]; }
 interface NPCDialogue { npcId: string; name: string; message: string; time: number; }
-interface DamageNumber { x: number; y: number; damage: number; time: number; }
+interface DamageNumber { x: number; y: number; damage: number; time: number; color?: string; prefix?: string; }
 interface KillFeed { text: string; time: number; }
 
 /* ── Constants ─────────────────────────────────────── */
@@ -63,6 +63,7 @@ const SPRITE_W = 64, SPRITE_H = 64, WALK_FRAMES = 9, ANIM_SPEED = 80;
 const DIR_ROW: Record<string, number> = { up: 8, left: 9, down: 10, right: 11 };
 const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
+const HEAL_COST = 20;
 
 interface Projectile { fromX: number; fromY: number; toX: number; toY: number; time: number; }
 
@@ -329,6 +330,20 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         projectilesRef.current.push({ ...data, time: performance.now() });
       });
 
+      room.onMessage("heal_effect", (data: { sessionId: string; amount: number }) => {
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          damageNumbersRef.current.push({
+            x: p.displayX + TILE_SIZE / 2,
+            y: p.displayY,
+            damage: data.amount,
+            time: performance.now(),
+            color: "#2ecc71",
+            prefix: "+",
+          });
+        }
+      });
+
       // Players
       room.state.players.onAdd((player: any, sessionId: string) => {
         const data: PlayerData = {
@@ -518,6 +533,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
+      if (e.key === "1") { roomRef.current?.send("heal"); return; }
       if (["w","a","s","d","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
         e.preventDefault(); keysRef.current.add(e.key);
       }
@@ -948,8 +964,8 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         ctx.globalAlpha = alpha;
         ctx.font = "bold 18px 'Segoe UI', sans-serif";
         ctx.textAlign = "center";
-        ctx.fillStyle = "#e74c3c";
-        ctx.fillText(`-${dmg.damage}`, dmg.x - camX, floatY);
+        ctx.fillStyle = dmg.color || "#e74c3c";
+        ctx.fillText(`${dmg.prefix || "-"}${dmg.damage}`, dmg.x - camX, floatY);
         ctx.restore();
       }
 
@@ -996,25 +1012,39 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           // HP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff"; ctx.textAlign = "left";
           ctx.fillText(`HP`, 10, barY);
-          drawHPBar(ctx, 40, barY - 5, me.hp, me.maxHp, 120);
+          drawHPBar(ctx, 95, barY - 5, me.hp, me.maxHp, 120);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`${me.hp}/${me.maxHp}`, 170, barY);
+          ctx.fillText(`${me.hp}/${me.maxHp}`, 165, barY);
+
+          // MP
+          ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#7ec8e3"; ctx.textAlign = "left";
+          ctx.fillText(`MP`, 10, barY + 16);
+          // Mana bar (same width as HP bar)
+          ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(34, barY + 8, 122, 7);
+          ctx.fillStyle = "#1a1a2e"; ctx.fillRect(35, barY + 9, 120, 5);
+          ctx.fillStyle = "#3498db"; ctx.fillRect(35, barY + 9, 120 * ((me as any).mp / ((me as any).maxMp || 1)), 5);
+          ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
+          ctx.fillText(`${(me as any).mp}/${(me as any).maxMp}`, 165, barY + 16);
 
           // XP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
-          ctx.fillText(`XP`, 10, barY + 18);
+          ctx.fillText(`XP`, 10, barY + 32);
           const xpInLevel = me.xp % 100;
-          ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(39, barY + 8, 122, 7);
-          ctx.fillStyle = "#333"; ctx.fillRect(40, barY + 9, 120, 5);
-          ctx.fillStyle = "#3498db"; ctx.fillRect(40, barY + 9, 120 * (xpInLevel / 100), 5);
+          ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(34, barY + 24, 122, 7);
+          ctx.fillStyle = "#1a1a2e"; ctx.fillRect(35, barY + 25, 120, 5);
+          ctx.fillStyle = "#f1c40f"; ctx.fillRect(35, barY + 25, 120 * (xpInLevel / 100), 5);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`Lv.${me.level} (${xpInLevel}/100)`, 170, barY + 18);
+          ctx.fillText(`Lv.${me.level} (${xpInLevel}/100)`, 165, barY + 32);
+
+          // Spell bar
+          ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
+          ctx.fillText(`[1] 💚 Heal (${HEAL_COST} MP)`, 10, barY + 48);
         }
       }
 
       if (!isMobile) {
         ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.font = "12px monospace"; ctx.textAlign = "right";
-        ctx.fillText("WASD: Move | Click: Target | E: Talk | Enter: Chat | Esc: Untarget", w - 10, 20);
+        ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | Enter: Chat | Esc: Untarget", w - 10, 20);
       }
 
       // Update React state for HUD overlay (throttled)
@@ -1085,6 +1115,8 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           <div style={{ position: "absolute", bottom: 30, right: 30, display: "flex", flexDirection: "column", gap: 10, zIndex: 10 }}>
             <div style={{ ...btnStyle, background: myStats?.targetId ? "rgba(231,76,60,0.6)" : "rgba(0,0,0,0.4)", fontSize: 14, width: 60, height: 60 }}
               onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
+            <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 14, width: 56, height: 56 }}
+              onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
             <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}
               onTouchStart={(e) => { e.preventDefault(); talkToNearbyNPC(); }}>💬</div>
             <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}

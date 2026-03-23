@@ -14,11 +14,15 @@ const PLAYER_RESPAWN_MS = 5000;
 const SPAWN_TILE_X = 36;
 const SPAWN_TILE_Y = 37;
 const AUTO_ATTACK_MS = 1200; // auto-attack interval
+const MANA_REGEN_MS = 2000; // regen 1 mp every 2s
+const MANA_REGEN_AMT = 2;   // mp per tick
+const HEAL_COST = 20;       // mana cost
+const HEAL_AMOUNT = 30;     // hp restored
 
 // Class configs
-const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number }> = {
-  warrior: { range: 1, attackBase: 30, hpBase: 120, attackInterval: 1000 },
-  ranger:  { range: 3, attackBase: 20, hpBase: 80,  attackInterval: 1500 },
+const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
+  warrior: { range: 1, attackBase: 30, hpBase: 120, attackInterval: 1000, mpBase: 40 },
+  ranger:  { range: 3, attackBase: 20, hpBase: 80,  attackInterval: 1500, mpBase: 60 },
 };
 
 const COLORS = [
@@ -114,6 +118,7 @@ export class GameRoom extends Room<GameState> {
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;
     player.hp = player.maxHp;
+    player.mp = player.maxMp;
     player.direction = "down";
     player.moving = false;
     player.targetId = "";
@@ -173,6 +178,8 @@ export class GameRoom extends Room<GameState> {
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
           player.hp = player.maxHp;
           player.attack = cfg.attackBase + (newLevel - 1) * 5;
+          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
+          player.mp = player.maxMp;
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
@@ -227,6 +234,8 @@ export class GameRoom extends Room<GameState> {
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
           player.hp = player.maxHp;
           player.attack = cfg.attackBase + (newLevel - 1) * 5;
+          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
+          player.mp = player.maxMp;
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
@@ -284,6 +293,8 @@ export class GameRoom extends Room<GameState> {
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
           player.hp = player.maxHp;
           player.attack = cfg.attackBase + (newLevel - 1) * 5;
+          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
+          player.mp = player.maxMp;
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
@@ -486,6 +497,16 @@ export class GameRoom extends Room<GameState> {
       });
     }, 200); // check every 200ms
 
+    // Mana regen tick
+    this.clock.setInterval(() => {
+      this.state.players.forEach((player) => {
+        if (player.hp <= 0) return;
+        if (player.mp < player.maxMp) {
+          player.mp = Math.min(player.maxMp, player.mp + MANA_REGEN_AMT);
+        }
+      });
+    }, MANA_REGEN_MS);
+
     // ── Movement ──
     this.onMessage("move", (client, data: { dx: number; dy: number }) => {
       const player = this.state.players.get(client.sessionId);
@@ -610,6 +631,18 @@ export class GameRoom extends Room<GameState> {
       pd.set(npc.id, (idx + 1) % npc.dialogue.length);
     });
 
+    // ── Heal spell ──
+    this.onMessage("heal", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.mp < HEAL_COST) return;
+      if (player.hp >= player.maxHp) return;
+      player.mp -= HEAL_COST;
+      const healed = Math.min(HEAL_AMOUNT, player.maxHp - player.hp);
+      player.hp += healed;
+      this.broadcast("heal_effect", { sessionId: client.sessionId, amount: healed });
+    });
+
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
@@ -627,6 +660,8 @@ export class GameRoom extends Room<GameState> {
     player.playerClass = cls;
     player.hp = cfg.hpBase;
     player.maxHp = cfg.hpBase;
+    player.mp = cfg.mpBase;
+    player.maxMp = cfg.mpBase;
     player.xp = 0;
     player.level = 1;
     player.attack = cfg.attackBase;
