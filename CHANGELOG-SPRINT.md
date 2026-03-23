@@ -10,4 +10,9 @@ Alex — read this in the morning to see what got built overnight.
 
 ## Features Added
 
-_(entries will be added as features ship)_
+### 1. 🎒 Inventory UI + Shop Fix
+- Press **I** (or tap 🎒 on mobile) to open inventory panel
+- 5×4 grid layout with item icons, names, and stack counts
+- Use buttons for consumables (potions)
+- Removed duplicate "Mira's Shop" overlay — only Pip's Shop remains
+- Purple-themed UI with hover effects

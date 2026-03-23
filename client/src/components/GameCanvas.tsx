@@ -1252,6 +1252,95 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | Enter: Chat | Esc: Untarget", w - 10, 20);
       }
 
+      /* ── Minimap (top-right corner) ──────────────────── */
+      if (me && worldMapRef.current) {
+        const mmW = isMobile ? 100 : 140;
+        const mmH = mmW;
+        const mmX = w - mmW - 10;
+        const mmY = isMobile ? 50 : 30;
+        const mw = mapSizeRef.current.w;
+        const mh = mapSizeRef.current.h;
+        const pxPerTileX = mmW / mw;
+        const pxPerTileY = mmH / mh;
+
+        // Background
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = "#0a1a05";
+        ctx.beginPath();
+        ctx.roundRect(mmX - 2, mmY - 2, mmW + 4, mmH + 4, 4);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Draw terrain pixels
+        const map = worldMapRef.current;
+        const MINIMAP_COLORS: Record<number, string> = {
+          0: "#2d5a1e", 1: "#c2a46e", 2: "#1e64c8", 3: "#1a4a0a",
+          4: "#757575", 5: "#3d7a1e", 6: "#8D6E63", 7: "#795548",
+          8: "#A1887F", 9: "#F5E6CA",
+        };
+        for (let ty = 0; ty < mh; ty++) {
+          for (let tx = 0; tx < mw; tx++) {
+            const tile = map[ty]?.[tx] ?? 0;
+            ctx.fillStyle = MINIMAP_COLORS[tile] || "#2d5a1e";
+            ctx.fillRect(mmX + tx * pxPerTileX, mmY + ty * pxPerTileY, Math.ceil(pxPerTileX), Math.ceil(pxPerTileY));
+          }
+        }
+
+        // Monster dots (red for wolves, colored for slimes)
+        slimesRef.current.forEach((s) => {
+          if (!s.alive) return;
+          const stx = s.displayX / TILE_SIZE;
+          const sty = s.displayY / TILE_SIZE;
+          ctx.fillStyle = s.color;
+          ctx.fillRect(mmX + stx * pxPerTileX - 1, mmY + sty * pxPerTileY - 1, 2, 2);
+        });
+        wolvesRef.current.forEach((wolf) => {
+          if (!wolf.alive) return;
+          const wtx = wolf.displayX / TILE_SIZE;
+          const wty = wolf.displayY / TILE_SIZE;
+          ctx.fillStyle = "#ff3333";
+          ctx.fillRect(mmX + wtx * pxPerTileX - 1, mmY + wty * pxPerTileY - 1, 3, 3);
+        });
+
+        // Other players (blue dots)
+        playersRef.current.forEach((p, sid) => {
+          if (sid === sessionIdRef.current) return;
+          const ptx = p.displayX / TILE_SIZE;
+          const pty = p.displayY / TILE_SIZE;
+          ctx.fillStyle = "#3498db";
+          ctx.fillRect(mmX + ptx * pxPerTileX - 1, mmY + pty * pxPerTileY - 1, 3, 3);
+        });
+
+        // Player dot (white, pulsing)
+        const myTx = me.displayX / TILE_SIZE;
+        const myTy = me.displayY / TILE_SIZE;
+        const dotSize = 2 + Math.sin(time / 300) * 1;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(mmX + myTx * pxPerTileX, mmY + myTy * pxPerTileY, dotSize, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Camera viewport rectangle
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 1;
+        const vpLeft = camX / TILE_SIZE;
+        const vpTop = camY / TILE_SIZE;
+        const vpW = w / TILE_SIZE;
+        const vpH = h / TILE_SIZE;
+        ctx.strokeRect(
+          mmX + vpLeft * pxPerTileX,
+          mmY + vpTop * pxPerTileY,
+          vpW * pxPerTileX,
+          vpH * pxPerTileY
+        );
+
+        ctx.restore();
+      }
+
       // Update React state for HUD overlay (throttled)
       if (me && Math.floor(time / 500) !== Math.floor((time - 16) / 500)) {
         setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId, isHardcore: me.isHardcore, gold: me.gold });
