@@ -8,7 +8,11 @@ import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
 const SLIME_RESPAWN_MS = 15000;
-const SLIME_MOVE_INTERVAL_MS = 2000;
+const SLIME_MOVE_INTERVAL_MS = 800; // faster tick for chase behavior
+const SLIME_ATTACK_INTERVAL_MS = 2000;
+const SLIME_ATTACK_RANGE = 1;
+const SLIME_CHASE_RANGE = 8; // how far slime chases after aggro
+const SLIME_ATK = 8; // slime base damage
 const XP_PER_LEVEL = 100;
 const PLAYER_RESPAWN_MS = 5000;
 const SPAWN_TILE_X = 36;
@@ -53,6 +57,7 @@ const SLIME_TYPES = [
 const lastMoveTime = new Map<string, number>();
 const lastAutoAttackTime = new Map<string, number>();
 const npcDialogueIndex = new Map<string, Map<string, number>>();
+const slimeLastAttack = new Map<string, number>();
 
 const SLIME_SPAWNS: { x: number; y: number; type: number }[] = [];
 
@@ -98,46 +103,50 @@ function canWalk(tx: number, ty: number): boolean {
   return !BLOCKED.has(tile) && tile !== TILE.WATER;
 }
 
-// BFS pathfinder — returns next tile to step to, or null if no path
+// BFS pathfinder — prefers cardinal directions, only uses diagonals when needed
 function bfsNextStep(sx: number, sy: number, gx: number, gy: number, maxDist: number): { x: number; y: number } | null {
   if (sx === gx && sy === gy) return null;
-  const dirs = [
+  const cardinal = [
     { dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
-    { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 }, // diagonals
   ];
-  const visited = new Set<string>();
-  visited.add(`${sx},${sy}`);
-  // Queue entries: [tx, ty, firstStepX, firstStepY]
-  const queue: [number, number, number, number][] = [];
-  for (const d of dirs) {
-    const nx = sx + d.dx, ny = sy + d.dy;
-    const key = `${nx},${ny}`;
-    if (visited.has(key)) continue;
-    // Target tile is always walkable (player is standing on it)
-    const walkable = (nx === gx && ny === gy) ? true : canWalk(nx, ny);
-    if (!walkable) continue;
-    if (nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44) continue; // village zone
-    visited.add(key);
-    if (nx === gx && ny === gy) return { x: nx, y: ny };
-    queue.push([nx, ny, nx, ny]);
-  }
-  let head = 0;
-  while (head < queue.length) {
-    const [cx, cy, fx, fy] = queue[head++];
-    if (Math.abs(cx - sx) > maxDist || Math.abs(cy - sy) > maxDist) continue;
+  const diagonal = [
+    { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 },
+  ];
+  // Try cardinal-only first, then allow diagonals
+  for (const dirs of [cardinal, [...cardinal, ...diagonal]]) {
+    const visited = new Set<string>();
+    visited.add(`${sx},${sy}`);
+    const queue: [number, number, number, number][] = [];
     for (const d of dirs) {
-      const nx = cx + d.dx, ny = cy + d.dy;
+      const nx = sx + d.dx, ny = sy + d.dy;
       const key = `${nx},${ny}`;
       if (visited.has(key)) continue;
       const walkable = (nx === gx && ny === gy) ? true : canWalk(nx, ny);
       if (!walkable) continue;
       if (nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44) continue;
       visited.add(key);
-      if (nx === gx && ny === gy) return { x: fx, y: fy };
-      queue.push([nx, ny, fx, fy]);
+      if (nx === gx && ny === gy) return { x: nx, y: ny };
+      queue.push([nx, ny, nx, ny]);
     }
+    let head = 0;
+    while (head < queue.length) {
+      const [cx, cy, fx, fy] = queue[head++];
+      if (Math.abs(cx - sx) > maxDist || Math.abs(cy - sy) > maxDist) continue;
+      for (const d of dirs) {
+        const nx = cx + d.dx, ny = cy + d.dy;
+        const key = `${nx},${ny}`;
+        if (visited.has(key)) continue;
+        const walkable = (nx === gx && ny === gy) ? true : canWalk(nx, ny);
+        if (!walkable) continue;
+        if (nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44) continue;
+        visited.add(key);
+        if (nx === gx && ny === gy) return { x: fx, y: fy };
+        queue.push([nx, ny, fx, fy]);
+      }
+    }
+    // If cardinal-only found a path, we already returned. Try with diagonals next.
   }
-  return null; // no path found
+  return null;
 }
 
 function dist(x1: number, y1: number, x2: number, y2: number): number {
@@ -187,6 +196,7 @@ export class GameRoom extends Room<GameState> {
       }
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       slime.hp = Math.max(0, slime.hp - damage);
+      slime.targetPlayerId = client.sessionId; // aggro on attacker
 
       // For ranger, send projectile
       if (player.playerClass === "ranger") {
@@ -201,6 +211,7 @@ export class GameRoom extends Room<GameState> {
 
       if (slime.hp <= 0) {
         slime.alive = false;
+        slime.targetPlayerId = "";
         player.targetId = "";
         const spawnIdx = parseInt(player.targetId.split("_")[1]) || 0;
         // Find spawn index from ID
@@ -237,6 +248,7 @@ export class GameRoom extends Room<GameState> {
             slime.x = spawn.x * TILE_SIZE;
             slime.y = spawn.y * TILE_SIZE;
             slime.hp = type.hp; slime.maxHp = type.hp;
+            slime.targetPlayerId = "";
             slime.alive = true;
           }
         }, SLIME_RESPAWN_MS);
@@ -487,11 +499,63 @@ export class GameRoom extends Room<GameState> {
       });
     }, WOLF_MOVE_INTERVAL_MS);
 
-    // Slime AI
+    // Slime AI — neutral until attacked, then chase + fight
     this.clock.setInterval(() => {
-      this.state.slimes.forEach((slime) => {
+      const now = Date.now();
+      this.state.slimes.forEach((slime, slimeId) => {
         if (!slime.alive) return;
-        if (Math.random() > 0.3) return;
+        const stx = Math.round(slime.x / TILE_SIZE);
+        const sty = Math.round(slime.y / TILE_SIZE);
+
+        // If aggroed, chase and attack
+        if (slime.targetPlayerId) {
+          const target = this.state.players.get(slime.targetPlayerId);
+          if (!target || target.hp <= 0) {
+            slime.targetPlayerId = ""; // target gone, de-aggro
+            return;
+          }
+          const d = dist(slime.x, slime.y, target.x, target.y);
+          if (d > SLIME_CHASE_RANGE) {
+            slime.targetPlayerId = ""; // too far, de-aggro
+            return;
+          }
+
+          // Attack if in range
+          if (d <= SLIME_ATTACK_RANGE) {
+            const last = slimeLastAttack.get(slimeId) || 0;
+            if (now - last >= SLIME_ATTACK_INTERVAL_MS) {
+              slimeLastAttack.set(slimeId, now);
+              const damage = SLIME_ATK + Math.floor(Math.random() * 6);
+              target.hp = Math.max(0, target.hp - damage);
+              this.broadcast("hit", {
+                targetId: slime.targetPlayerId,
+                damage,
+                x: target.x + TILE_SIZE / 2,
+                y: target.y,
+                attackerId: slimeId,
+              });
+              if (target.hp <= 0) {
+                slime.targetPlayerId = "";
+                this.broadcast("kill", { targetId: slime.targetPlayerId, killerId: slimeId, killerName: "Slime", xp: 0 });
+                this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS);
+              }
+            }
+            return; // don't move while attacking
+          }
+
+          // Chase — BFS pathfind toward player
+          const ptx = Math.round(target.x / TILE_SIZE);
+          const pty = Math.round(target.y / TILE_SIZE);
+          const step = bfsNextStep(stx, sty, ptx, pty, SLIME_CHASE_RANGE);
+          if (step) {
+            slime.x = step.x * TILE_SIZE;
+            slime.y = step.y * TILE_SIZE;
+          }
+          return;
+        }
+
+        // Neutral — random wander
+        if (Math.random() > 0.15) return; // wander less often
         const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
         const dir = dirs[Math.floor(Math.random() * dirs.length)];
         const newX = slime.x + dir.dx * TILE_SIZE;
@@ -500,7 +564,6 @@ export class GameRoom extends Room<GameState> {
         if (!canWalk(tx, ty)) return;
         if (tx >= 28 && tx <= 44 && ty >= 28 && ty <= 44) return;
         if (NPCS.some(n => n.x === tx && n.y === ty)) return;
-        if (this.isTileOccupiedByPlayer(newX, newY, "")) return;
         slime.x = newX;
         slime.y = newY;
       });
