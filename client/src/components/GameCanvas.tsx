@@ -822,12 +822,12 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         const ny = npc.y * TILE_SIZE + TILE_SIZE / 2 - camY;
         if (nx < -80 || nx > w + 80 || ny < -80 || ny > h + 80) continue;
 
-        ctx.beginPath(); ctx.ellipse(nx, ny + 20, 18, 6, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+        ctx.beginPath(); ctx.ellipse(nx, ny + 16, 14, 5, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fill();
 
         const tinted = getTintedSprite(npc.color);
         if (tinted) {
           const row = DIR_ROW[npc.direction] ?? DIR_ROW.down;
-          ctx.drawImage(tinted, 0, row * SPRITE_H, SPRITE_W, SPRITE_H, nx - 48, ny - 56, 96, 96);
+          ctx.drawImage(tinted, 12, row * SPRITE_H + 8, SPRITE_W - 24, SPRITE_H - 8, nx - 28, ny - 40, 56, 56);
         } else {
           ctx.beginPath(); ctx.arc(nx, ny, 20, 0, Math.PI * 2); ctx.fillStyle = npc.color; ctx.fill();
         }
@@ -857,24 +857,24 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           ctx.strokeRect(px - 28, py - 28, 56, 56);
         }
 
-        ctx.beginPath(); ctx.ellipse(px, py + 20, 18, 6, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+        // Shadow
+        ctx.beginPath(); ctx.ellipse(px, py + 16, 14, 5, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fill();
 
         const sprite = getClassSprite(p.playerClass);
         if (sprite) {
           const row = DIR_ROW[p.direction] ?? DIR_ROW.down;
           let frame = 0;
           if (p.moveStartTime > 0 || p.moving) frame = Math.floor(time / ANIM_SPEED) % (WALK_FRAMES - 1) + 1;
-          ctx.drawImage(sprite, frame * SPRITE_W, row * SPRITE_H, SPRITE_W, SPRITE_H, px - 48, py - 56, 96, 96);
+          // Crop tighter: skip 12px transparent border on each side of the 64x64 frame
+          ctx.drawImage(sprite, frame * SPRITE_W + 12, row * SPRITE_H + 8, SPRITE_W - 24, SPRITE_H - 8, px - 28, py - 40, 56, 56);
 
         } else {
           ctx.beginPath(); ctx.arc(px, py, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
         }
 
-        const classIcon = p.playerClass === "ranger" ? "🏹" : "⚔️";
-        const nameStr = `${classIcon} ${p.name}`;
         ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, px + 1, py - 41);
-        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, px, py - 42);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(p.name, px + 1, py - 41);
+        ctx.fillStyle = "#fff"; ctx.fillText(p.name, px, py - 42);
 
         // Level badge
         if (p.level > 1) {
