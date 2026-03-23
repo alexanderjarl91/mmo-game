@@ -1166,6 +1166,12 @@ export class GameRoom extends Room<GameState> {
       this.state.wolves.forEach((wolf) => {
         if (wolf.alive && wolf.x === newX && wolf.y === newY) monsterBlocking = true;
       });
+      this.state.goblins.forEach((goblin) => {
+        if (goblin.alive && goblin.x === newX && goblin.y === newY) monsterBlocking = true;
+      });
+      this.state.skeletons.forEach((skeleton) => {
+        if (skeleton.alive && skeleton.x === newX && skeleton.y === newY) monsterBlocking = true;
+      });
       if (monsterBlocking) {
         lastMoveTime.set(client.sessionId, now);
         return;
@@ -1195,8 +1201,10 @@ export class GameRoom extends Room<GameState> {
       if (tid) {
         const slime = this.state.slimes.get(tid);
         const wolf = this.state.wolves.get(tid);
+        const goblin = this.state.goblins.get(tid);
+        const skeleton = this.state.skeletons.get(tid);
         const targetPlayer = this.state.players.get(tid);
-        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
+        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
         if (!valid) {
           player.targetId = "";
           return;
@@ -1401,6 +1409,50 @@ export class GameRoom extends Room<GameState> {
           if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
           this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
+        }
+        return;
+      }
+
+      // Check goblin target
+      const goblinT = this.state.goblins.get(player.targetId);
+      if (goblinT && goblinT.alive) {
+        const d = dist(px, py, goblinT.x, goblinT.y);
+        if (d > cfg.range) return;
+        player.mp -= POWER_SHOT_COST;
+        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        goblinT.hp = Math.max(0, goblinT.hp - damage);
+        goblinT.targetPlayerId = client.sessionId;
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblinT.x + TILE_SIZE / 2, toY: goblinT.y });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        if (goblinT.hp <= 0) {
+          goblinT.alive = false; goblinT.targetPlayerId = ""; player.targetId = "";
+          player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+          const loot = rollLoot("goblin"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
+          checkLevelUp(player, this, client.sessionId);
+          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+          this.clock.setTimeout(() => { goblinT.x = goblinT.spawnX; goblinT.y = goblinT.spawnY; goblinT.hp = GOBLIN_HP; goblinT.maxHp = GOBLIN_HP; goblinT.targetPlayerId = ""; goblinT.alive = true; }, GOBLIN_RESPAWN_MS);
+        }
+        return;
+      }
+
+      // Check skeleton target
+      const skelT = this.state.skeletons.get(player.targetId);
+      if (skelT && skelT.alive) {
+        const d = dist(px, py, skelT.x, skelT.y);
+        if (d > cfg.range) return;
+        player.mp -= POWER_SHOT_COST;
+        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        skelT.hp = Math.max(0, skelT.hp - damage);
+        skelT.targetPlayerId = client.sessionId;
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skelT.x + TILE_SIZE / 2, toY: skelT.y });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        if (skelT.hp <= 0) {
+          skelT.alive = false; skelT.targetPlayerId = ""; player.targetId = "";
+          player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+          const loot = rollLoot("skeleton"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
+          checkLevelUp(player, this, client.sessionId);
+          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+          this.clock.setTimeout(() => { skelT.x = skelT.spawnX; skelT.y = skelT.spawnY; skelT.hp = SKELETON_HP; skelT.maxHp = SKELETON_HP; skelT.targetPlayerId = ""; skelT.alive = true; }, SKELETON_RESPAWN_MS);
         }
         return;
       }

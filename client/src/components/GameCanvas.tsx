@@ -1157,6 +1157,150 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
+      /* ── Goblins ───────────────────────────────────────── */
+      goblinsRef.current.forEach((g, goblinId) => {
+        if (!g.alive) return;
+        const gx = g.displayX + TILE_SIZE / 2 - camX;
+        const gy = g.displayY + TILE_SIZE / 2 - camY;
+        if (gx < -80 || gx > w + 80 || gy < -80 || gy > h + 80) return;
+
+        const isGoblinTargeted = myTargetId === goblinId;
+
+        if (isGoblinTargeted) {
+          const pulse = 0.5 + Math.sin(time / 200) * 0.3;
+          ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(gx - TILE_SIZE / 2, gy - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
+        }
+
+        ctx.save();
+        const gobHit = g.hitTime && (now - g.hitTime < 200);
+        if (gobHit) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
+
+        // Shadow
+        ctx.beginPath(); ctx.ellipse(gx, gy + 14, 12, 4, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+
+        // Goblin body — green hunched creature
+        const hop = Math.sin(time / 200) * 2;
+        ctx.fillStyle = "#4a8c3f";
+        ctx.beginPath();
+        ctx.ellipse(gx, gy + 2 - hop, 14, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head
+        ctx.fillStyle = "#5da84e";
+        ctx.beginPath();
+        ctx.arc(gx, gy - 14 - hop, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pointy ears
+        ctx.fillStyle = "#4a8c3f";
+        ctx.beginPath(); ctx.moveTo(gx - 10, gy - 16 - hop); ctx.lineTo(gx - 18, gy - 24 - hop); ctx.lineTo(gx - 6, gy - 12 - hop); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(gx + 10, gy - 16 - hop); ctx.lineTo(gx + 18, gy - 24 - hop); ctx.lineTo(gx + 6, gy - 12 - hop); ctx.fill();
+
+        // Eyes (yellow, beady)
+        ctx.fillStyle = "#ff0";
+        ctx.beginPath(); ctx.arc(gx - 4, gy - 16 - hop, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(gx + 4, gy - 16 - hop, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.beginPath(); ctx.arc(gx - 3, gy - 15 - hop, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(gx + 5, gy - 15 - hop, 1.5, 0, Math.PI * 2); ctx.fill();
+
+        // Variant indicator
+        if (g.variant === "archer") {
+          // Small bow
+          ctx.strokeStyle = "#8B4513"; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(gx + 16, gy - 5 - hop, 10, -0.8, 0.8); ctx.stroke();
+        } else if (g.variant === "shaman") {
+          // Staff glow
+          ctx.fillStyle = "#9b59b6";
+          ctx.beginPath(); ctx.arc(gx - 14, gy - 20 - hop, 4, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = "#6c3483"; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(gx - 14, gy - 16 - hop); ctx.lineTo(gx - 14, gy + 10 - hop); ctx.stroke();
+        }
+
+        ctx.restore();
+
+        // Name
+        ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Goblin", gx + 1, gy - 33 - (g.hitTime ? 0 : 0));
+        ctx.fillStyle = "#7dcea0"; ctx.fillText(g.variant === "shaman" ? "Goblin Shaman" : g.variant === "archer" ? "Goblin Archer" : "Goblin", gx, gy - 34);
+
+        if (g.hp < g.maxHp || isGoblinTargeted) {
+          drawHPBar(ctx, gx, gy - 28, g.hp, g.maxHp, 40);
+        }
+      });
+
+      /* ── Skeletons ──────────────────────────────────── */
+      skeletonsRef.current.forEach((sk, skelId) => {
+        if (!sk.alive) return;
+        const sx = sk.displayX + TILE_SIZE / 2 - camX;
+        const sy = sk.displayY + TILE_SIZE / 2 - camY;
+        if (sx < -80 || sx > w + 80 || sy < -80 || sy > h + 80) return;
+
+        const isSkelTargeted = myTargetId === skelId;
+
+        if (isSkelTargeted) {
+          const pulse = 0.5 + Math.sin(time / 200) * 0.3;
+          ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(sx - TILE_SIZE / 2, sy - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
+        }
+
+        ctx.save();
+        const skelHit = sk.hitTime && (now - sk.hitTime < 200);
+        if (skelHit) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
+
+        // Shadow
+        ctx.beginPath(); ctx.ellipse(sx, sy + 16, 10, 4, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+
+        // Skeleton body — bony white figure
+        // Spine
+        ctx.strokeStyle = "#e8e8e8"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(sx, sy - 10); ctx.lineTo(sx, sy + 10); ctx.stroke();
+        // Ribs
+        ctx.lineWidth = 2;
+        for (let r = 0; r < 3; r++) {
+          const ry = sy - 4 + r * 6;
+          ctx.beginPath(); ctx.moveTo(sx - 8, ry); ctx.lineTo(sx + 8, ry); ctx.stroke();
+        }
+        // Skull
+        ctx.fillStyle = "#f0f0f0";
+        ctx.beginPath(); ctx.arc(sx, sy - 16, 10, 0, Math.PI * 2); ctx.fill();
+        // Eye sockets (dark)
+        ctx.fillStyle = "#1a1a1a";
+        ctx.beginPath(); ctx.arc(sx - 4, sy - 18, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(sx + 4, sy - 18, 3, 0, Math.PI * 2); ctx.fill();
+        // Jaw
+        ctx.strokeStyle = "#d0d0d0"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(sx - 5, sy - 10); ctx.lineTo(sx - 3, sy - 7); ctx.lineTo(sx + 3, sy - 7); ctx.lineTo(sx + 5, sy - 10); ctx.stroke();
+        // Arms
+        ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(sx - 8, sy - 4); ctx.lineTo(sx - 16, sy + 4 + Math.sin(time / 250) * 3); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx + 8, sy - 4); ctx.lineTo(sx + 16, sy + 4 - Math.sin(time / 250) * 3); ctx.stroke();
+        // Legs
+        ctx.beginPath(); ctx.moveTo(sx, sy + 10); ctx.lineTo(sx - 6, sy + 22); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx, sy + 10); ctx.lineTo(sx + 6, sy + 22); ctx.stroke();
+
+        // Red eye glow
+        ctx.fillStyle = skelHit ? "#fff" : "rgba(255,50,50,0.6)";
+        ctx.beginPath(); ctx.arc(sx - 4, sy - 18, 1.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(sx + 4, sy - 18, 1.5, 0, Math.PI * 2); ctx.fill();
+
+        ctx.restore();
+
+        // Name
+        ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Skeleton", sx + 1, sy - 33);
+        ctx.fillStyle = "#bdc3c7"; ctx.fillText("Skeleton", sx, sy - 34);
+
+        if (sk.hp < sk.maxHp || isSkelTargeted) {
+          drawHPBar(ctx, sx, sy - 28, sk.hp, sk.maxHp, 40);
+        }
+      });
+
       /* ── NPCs ────────────────────────────────────────── */
 
       for (const npc of npcsRef.current) {
@@ -1639,6 +1783,19 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           const wty = wolf.displayY / TILE_SIZE;
           ctx.fillStyle = "#ff3333";
           ctx.fillRect(mmX + wtx * pxPerTileX - 1, mmY + wty * pxPerTileY - 1, 3, 3);
+        });
+
+        // Goblin dots (green)
+        goblinsRef.current.forEach((g) => {
+          if (!g.alive) return;
+          ctx.fillStyle = "#4a8c3f";
+          ctx.fillRect(mmX + (g.displayX / TILE_SIZE) * pxPerTileX - 1, mmY + (g.displayY / TILE_SIZE) * pxPerTileY - 1, 2, 2);
+        });
+        // Skeleton dots (white)
+        skeletonsRef.current.forEach((sk) => {
+          if (!sk.alive) return;
+          ctx.fillStyle = "#e0e0e0";
+          ctx.fillRect(mmX + (sk.displayX / TILE_SIZE) * pxPerTileX - 1, mmY + (sk.displayY / TILE_SIZE) * pxPerTileY - 1, 3, 3);
         });
 
         // Other players (blue dots)
