@@ -21,6 +21,12 @@ interface PlayerData {
   gold: number;
   inventory: Array<{ itemId: string; quantity: number }>;
   deathTime: number; // when hp first hit 0
+  equipWeapon: string;
+  equipHelmet: string;
+  equipChest: string;
+  equipLegs: string;
+  equipBoots: string;
+  defense: number;
 }
 
 interface SlimeData {
@@ -36,6 +42,31 @@ interface SlimeData {
 }
 
 interface WolfData {
+  displayX: number; displayY: number;
+  fromX: number; fromY: number;
+  toX: number; toY: number;
+  moveStartTime: number;
+  serverX: number; serverY: number;
+  hp: number; maxHp: number;
+  alive: boolean;
+  targetPlayerId: string;
+  hitTime: number;
+}
+
+interface GoblinData {
+  displayX: number; displayY: number;
+  fromX: number; fromY: number;
+  toX: number; toY: number;
+  moveStartTime: number;
+  serverX: number; serverY: number;
+  hp: number; maxHp: number;
+  alive: boolean;
+  variant: string;
+  targetPlayerId: string;
+  hitTime: number;
+}
+
+interface SkeletonData {
   displayX: number; displayY: number;
   fromX: number; fromY: number;
   toX: number; toY: number;
@@ -72,11 +103,24 @@ const HEAL_COST = 20;
 const POTION_COOLDOWN_MS = 2000;
 
 // Item definitions (mirror server)
-const ITEMS: Record<string, { name: string; icon: string; buyPrice: number; sellPrice: number; effect?: { hp?: number; mp?: number } }> = {
+type EquipSlot = "weapon" | "helmet" | "chest" | "legs" | "boots";
+const ITEMS: Record<string, { name: string; icon: string; buyPrice: number; sellPrice: number; effect?: { hp?: number; mp?: number }; equipSlot?: EquipSlot; equipBonus?: { atk?: number; def?: number; maxHp?: number; maxMp?: number } }> = {
   health_potion: { name: "Health Potion", icon: "❤️", buyPrice: 50, sellPrice: 25, effect: { hp: 50 } },
   mana_potion: { name: "Mana Potion", icon: "💙", buyPrice: 30, sellPrice: 15, effect: { mp: 30 } },
+  wooden_sword: { name: "Wooden Sword", icon: "🗡️", buyPrice: 100, sellPrice: 40, equipSlot: "weapon", equipBonus: { atk: 5 } },
+  iron_sword: { name: "Iron Sword", icon: "⚔️", buyPrice: 300, sellPrice: 120, equipSlot: "weapon", equipBonus: { atk: 12 } },
+  hunters_bow: { name: "Hunter's Bow", icon: "🏹", buyPrice: 250, sellPrice: 100, equipSlot: "weapon", equipBonus: { atk: 10 } },
+  fire_staff: { name: "Fire Staff", icon: "🔥", buyPrice: 0, sellPrice: 200, equipSlot: "weapon", equipBonus: { atk: 18, maxMp: 20 } },
+  leather_helmet: { name: "Leather Cap", icon: "🪖", buyPrice: 80, sellPrice: 30, equipSlot: "helmet", equipBonus: { def: 3, maxHp: 10 } },
+  iron_helmet: { name: "Iron Helm", icon: "⛑️", buyPrice: 0, sellPrice: 100, equipSlot: "helmet", equipBonus: { def: 7, maxHp: 25 } },
+  leather_chest: { name: "Leather Vest", icon: "🦺", buyPrice: 120, sellPrice: 50, equipSlot: "chest", equipBonus: { def: 5, maxHp: 15 } },
+  chain_chest: { name: "Chainmail", icon: "🛡️", buyPrice: 0, sellPrice: 160, equipSlot: "chest", equipBonus: { def: 10, maxHp: 40 } },
+  leather_legs: { name: "Leather Pants", icon: "👖", buyPrice: 90, sellPrice: 35, equipSlot: "legs", equipBonus: { def: 4, maxHp: 10 } },
+  iron_legs: { name: "Iron Greaves", icon: "🦿", buyPrice: 0, sellPrice: 120, equipSlot: "legs", equipBonus: { def: 8, maxHp: 30 } },
+  sandals: { name: "Traveler's Sandals", icon: "👡", buyPrice: 60, sellPrice: 20, equipSlot: "boots", equipBonus: { def: 2 } },
+  iron_boots: { name: "Iron Boots", icon: "🥾", buyPrice: 0, sellPrice: 80, equipSlot: "boots", equipBonus: { def: 5, maxHp: 15 } },
 };
-const SHOP_ITEMS = ["health_potion", "mana_potion"];
+const SHOP_ITEMS = ["health_potion", "mana_potion", "wooden_sword", "leather_helmet", "leather_chest", "leather_legs", "sandals"];
 
 // Tibia XP formula
 function xpForLevel(level: number): number {
@@ -95,6 +139,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const playersRef = useRef<Map<string, PlayerData>>(new Map());
   const slimesRef = useRef<Map<string, SlimeData>>(new Map());
   const wolvesRef = useRef<Map<string, WolfData>>(new Map());
+  const goblinsRef = useRef<Map<string, GoblinData>>(new Map());
+  const skeletonsRef = useRef<Map<string, SkeletonData>>(new Map());
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
   const [connected, setConnected] = useState(false);
@@ -128,6 +174,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const damageNumbersRef = useRef<DamageNumber[]>([]);
   const killFeedRef = useRef<KillFeed[]>([]);
   const projectilesRef = useRef<Projectile[]>([]);
+  const lootNotifRef = useRef<Array<{ text: string; time: number }>>([]);
   const levelUpEffectsRef = useRef<LevelUpEffect[]>([]);
   const particlesRef = useRef<Particle[]>([]);
 
@@ -322,6 +369,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             time: performance.now(),
           });
         }
+        // Goblin hit
+        const goblin = goblinsRef.current.get(data.targetId);
+        if (goblin) {
+          goblin.hitTime = performance.now();
+          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now() });
+        }
+        // Skeleton hit
+        const skel = skeletonsRef.current.get(data.targetId);
+        if (skel) {
+          skel.hitTime = performance.now();
+          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now() });
+        }
         // Player hit (by wolf or other mob)
         const player = playersRef.current.get(data.targetId);
         if (player) {
@@ -335,8 +394,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
 
       room.onMessage("kill", (data: { killerName: string; xp: number; targetId?: string }) => {
-        const isWolf = data.targetId?.startsWith("wolf_");
-        killFeedRef.current.push({ text: `${data.killerName} slayed a ${isWolf ? "wolf" : "slime"}! (+${data.xp} XP)`, time: performance.now() });
+        const tid = data.targetId || "";
+        const monsterName = tid.startsWith("wolf_") ? "wolf" : tid.startsWith("goblin_") ? "goblin" : tid.startsWith("skeleton_") ? "skeleton" : "slime";
+        killFeedRef.current.push({ text: `${data.killerName} slayed a ${monsterName}! (+${data.xp} XP)`, time: performance.now() });
         if (killFeedRef.current.length > 5) killFeedRef.current.shift();
       });
 
@@ -430,6 +490,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
+      room.onMessage("loot_received", (data: { items: string[] }) => {
+        const now = performance.now();
+        for (const text of data.items) {
+          lootNotifRef.current.push({ text, time: now });
+        }
+        if (lootNotifRef.current.length > 5) lootNotifRef.current.splice(0, lootNotifRef.current.length - 5);
+      });
+
       // Players
       room.state.players.onAdd((player: any, sessionId: string) => {
         const data: PlayerData = {
@@ -450,6 +518,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           gold: player.gold || 0,
           inventory: [],
           deathTime: (player.hp || 100) <= 0 ? performance.now() : 0,
+          equipWeapon: player.equipWeapon || "",
+          equipHelmet: player.equipHelmet || "",
+          equipChest: player.equipChest || "",
+          equipLegs: player.equipLegs || "",
+          equipBoots: player.equipBoots || "",
+          defense: player.defense || 0,
         };
         // Sync inventory
         if (player.inventory) {
@@ -489,6 +563,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.targetId = player.targetId || "";
           p.isHardcore = player.isHardcore || false;
           p.gold = player.gold || 0;
+          p.equipWeapon = player.equipWeapon || "";
+          p.equipHelmet = player.equipHelmet || "";
+          p.equipChest = player.equipChest || "";
+          p.equipLegs = player.equipLegs || "";
+          p.equipBoots = player.equipBoots || "";
+          p.defense = player.defense || 0;
           // Track death moment
           if (player.hp <= 0 && p.deathTime === 0) p.deathTime = performance.now();
           if (player.hp > 0) p.deathTime = 0;
@@ -566,6 +646,70 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
       room.state.wolves.onRemove((_: any, id: string) => { wolvesRef.current.delete(id); });
 
+      // Goblins
+      room.state.goblins.onAdd((goblin: any, id: string) => {
+        const data: GoblinData = {
+          displayX: goblin.x, displayY: goblin.y,
+          fromX: goblin.x, fromY: goblin.y,
+          toX: goblin.x, toY: goblin.y,
+          moveStartTime: 0,
+          serverX: goblin.x, serverY: goblin.y,
+          hp: goblin.hp, maxHp: goblin.maxHp,
+          alive: goblin.alive,
+          variant: goblin.variant || "normal",
+          targetPlayerId: goblin.targetPlayerId || "",
+          hitTime: 0,
+        };
+        goblinsRef.current.set(id, data);
+        goblin.onChange(() => {
+          const g = goblinsRef.current.get(id);
+          if (!g) return;
+          const newX = goblin.x, newY = goblin.y;
+          if (newX !== g.serverX || newY !== g.serverY) {
+            g.fromX = g.displayX; g.fromY = g.displayY;
+            g.toX = newX; g.toY = newY;
+            g.moveStartTime = performance.now();
+          }
+          g.serverX = newX; g.serverY = newY;
+          g.hp = goblin.hp; g.maxHp = goblin.maxHp;
+          g.alive = goblin.alive;
+          g.variant = goblin.variant || "normal";
+          g.targetPlayerId = goblin.targetPlayerId || "";
+        });
+      });
+      room.state.goblins.onRemove((_: any, id: string) => { goblinsRef.current.delete(id); });
+
+      // Skeletons
+      room.state.skeletons.onAdd((skeleton: any, id: string) => {
+        const data: SkeletonData = {
+          displayX: skeleton.x, displayY: skeleton.y,
+          fromX: skeleton.x, fromY: skeleton.y,
+          toX: skeleton.x, toY: skeleton.y,
+          moveStartTime: 0,
+          serverX: skeleton.x, serverY: skeleton.y,
+          hp: skeleton.hp, maxHp: skeleton.maxHp,
+          alive: skeleton.alive,
+          targetPlayerId: skeleton.targetPlayerId || "",
+          hitTime: 0,
+        };
+        skeletonsRef.current.set(id, data);
+        skeleton.onChange(() => {
+          const s = skeletonsRef.current.get(id);
+          if (!s) return;
+          const newX = skeleton.x, newY = skeleton.y;
+          if (newX !== s.serverX || newY !== s.serverY) {
+            s.fromX = s.displayX; s.fromY = s.displayY;
+            s.toX = newX; s.toY = newY;
+            s.moveStartTime = performance.now();
+          }
+          s.serverX = newX; s.serverY = newY;
+          s.hp = skeleton.hp; s.maxHp = skeleton.maxHp;
+          s.alive = skeleton.alive;
+          s.targetPlayerId = skeleton.targetPlayerId || "";
+        });
+      });
+      room.state.skeletons.onRemove((_: any, id: string) => { skeletonsRef.current.delete(id); });
+
       room.onLeave(() => { if (!cancelled) setConnected(false); });
     }).catch((err) => { if (!cancelled) setError(err.message || "Failed to connect"); });
 
@@ -610,6 +754,24 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const wx = wolf.displayX + TILE_SIZE / 2;
       const wy = wolf.displayY + TILE_SIZE / 2;
       const d = Math.sqrt((worldX - wx) ** 2 + (worldY - wy) ** 2);
+      if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
+    });
+
+    // Check goblins
+    goblinsRef.current.forEach((g, id) => {
+      if (!g.alive) return;
+      const gx = g.displayX + TILE_SIZE / 2;
+      const gy = g.displayY + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - gx) ** 2 + (worldY - gy) ** 2);
+      if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
+    });
+
+    // Check skeletons
+    skeletonsRef.current.forEach((s, id) => {
+      if (!s.alive) return;
+      const sx = s.displayX + TILE_SIZE / 2;
+      const sy = s.displayY + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - sx) ** 2 + (worldY - sy) ** 2);
       if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
     });
 
@@ -784,12 +946,35 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
+      // Update goblin positions
+      const GOBLIN_MOVE_DURATION = 250;
+      goblinsRef.current.forEach((g) => {
+        if (g.moveStartTime > 0) {
+          const t = Math.min((now - g.moveStartTime) / GOBLIN_MOVE_DURATION, 1);
+          g.displayX = g.fromX + (g.toX - g.fromX) * t;
+          g.displayY = g.fromY + (g.toY - g.fromY) * t;
+          if (t >= 1) { g.displayX = g.toX; g.displayY = g.toY; g.fromX = g.toX; g.fromY = g.toY; g.moveStartTime = 0; }
+        }
+      });
+
+      // Update skeleton positions
+      const SKELETON_MOVE_DURATION = 400;
+      skeletonsRef.current.forEach((s) => {
+        if (s.moveStartTime > 0) {
+          const t = Math.min((now - s.moveStartTime) / SKELETON_MOVE_DURATION, 1);
+          s.displayX = s.fromX + (s.toX - s.fromX) * t;
+          s.displayY = s.fromY + (s.toY - s.fromY) * t;
+          if (t >= 1) { s.displayX = s.toX; s.displayY = s.toY; s.fromX = s.toX; s.fromY = s.toY; s.moveStartTime = 0; }
+        }
+      });
+
       // Clean up timed effects
       chatBubblesRef.current = chatBubblesRef.current.filter(b => now - b.time < CHAT_DURATION);
       emoteBubblesRef.current = emoteBubblesRef.current.filter(b => now - b.time < EMOTE_DURATION);
       damageNumbersRef.current = damageNumbersRef.current.filter(d => now - d.time < DAMAGE_DURATION);
       killFeedRef.current = killFeedRef.current.filter(k => now - k.time < 5000);
       projectilesRef.current = projectilesRef.current.filter(p => now - p.time < 400);
+      lootNotifRef.current = lootNotifRef.current.filter(l => now - l.time < 3000);
       levelUpEffectsRef.current = levelUpEffectsRef.current.filter(e => now - e.time < 2000);
       // Update particles
       particlesRef.current = particlesRef.current.filter(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--; return p.life > 0; });
@@ -1223,6 +1408,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.restore();
       });
 
+      /* ── Loot notifications (left side, above HUD) ──── */
+
+      lootNotifRef.current.forEach((ln, i) => {
+        const age = now - ln.time;
+        const alpha = age > 2500 ? (3000 - age) / 500 : Math.min(age / 150, 1);
+        ctx.save(); ctx.globalAlpha = alpha;
+        ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "left";
+        ctx.fillStyle = "#2ecc71";
+        ctx.fillText(`+ ${ln.text}`, 12, h - 100 - i * 20);
+        ctx.restore();
+      });
+
       /* ── HUD ─────────────────────────────────────────── */
 
       ctx.font = "12px monospace"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.textAlign = "left";
@@ -1356,22 +1553,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         let nightAlpha = 0;
         let tintR = 0, tintG = 0, tintB = 0;
         if (cyclePos < 0.2) {
-          // Dawn: dark → light, warm orange tint
+          // Dawn: dark → light, warm orange tint (subtle)
           const t = cyclePos / 0.2;
-          nightAlpha = 0.35 * (1 - t);
+          nightAlpha = 0.14 * (1 - t);
           tintR = 255; tintG = 140; tintB = 50;
         } else if (cyclePos < 0.5) {
           // Day: clear, no overlay
           nightAlpha = 0;
         } else if (cyclePos < 0.65) {
-          // Dusk: light → getting dark, warm red/purple tint
+          // Dusk: light → getting dark, warm red/purple tint (subtle)
           const t = (cyclePos - 0.5) / 0.15;
-          nightAlpha = 0.3 * t;
+          nightAlpha = 0.12 * t;
           tintR = Math.floor(200 + 55 * (1 - t)); tintG = Math.floor(80 * (1 - t)); tintB = Math.floor(120 * t);
         } else {
-          // Night: dark blue overlay
+          // Night: dark blue overlay (subtle)
           const t = Math.min((cyclePos - 0.65) / 0.1, 1);
-          nightAlpha = 0.3 + 0.15 * t;
+          nightAlpha = 0.12 + 0.06 * t;
           tintR = 20; tintG = 20; tintB = 80;
         }
         if (nightAlpha > 0.01) {
@@ -1490,6 +1687,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             isHardcore: me.isHardcore,
             gold: me.gold,
             inventory: me.inventory,
+            equipment: {
+              weapon: me.equipWeapon, helmet: me.equipHelmet,
+              chest: me.equipChest, legs: me.equipLegs, boots: me.equipBoots,
+            },
           }));
         } catch {}
       }
@@ -1624,6 +1825,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) {
           slots.push(me.inventory[i] && me.inventory[i].quantity > 0 ? me.inventory[i] : null);
         }
+        const equipSlots: Array<{ slot: EquipSlot; label: string; icon: string; itemId: string }> = [
+          { slot: "weapon", label: "Weapon", icon: "⚔️", itemId: me.equipWeapon },
+          { slot: "helmet", label: "Head", icon: "🪖", itemId: me.equipHelmet },
+          { slot: "chest", label: "Chest", icon: "🦺", itemId: me.equipChest },
+          { slot: "legs", label: "Legs", icon: "👖", itemId: me.equipLegs },
+          { slot: "boots", label: "Feet", icon: "👡", itemId: me.equipBoots },
+        ];
         return (
           <div style={{
             position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
@@ -1633,12 +1841,42 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             <div style={{
               background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
               border: "2px solid #8b5cf6", borderRadius: 12, padding: 20,
-              minWidth: GRID_COLS * (SLOT_PX + 4) + 40,
+              minWidth: 420, maxWidth: 500,
             }} onClick={(e) => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                 <h2 style={{ color: "#c4b5fd", margin: 0, fontSize: 18 }}>🎒 Inventory</h2>
-                <span style={{ color: "#f1c40f", fontSize: 13 }}>💰 {me.gold}g</span>
+                <div style={{ textAlign: "right" }}>
+                  <span style={{ color: "#f1c40f", fontSize: 13 }}>💰 {me.gold}g</span>
+                  {me.defense > 0 && <span style={{ color: "#7ec8e3", fontSize: 11, marginLeft: 10 }}>🛡️ {me.defense} DEF</span>}
+                </div>
               </div>
+
+              {/* Equipment slots */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+                {equipSlots.map((es) => {
+                  const equipped = es.itemId ? ITEMS[es.itemId] : null;
+                  return (
+                    <div key={es.slot} style={{
+                      width: SLOT_PX + 16, padding: "4px", borderRadius: 6,
+                      background: equipped ? "rgba(46,204,113,0.15)" : "rgba(255,255,255,0.04)",
+                      border: equipped ? "1px solid rgba(46,204,113,0.4)" : "1px dashed rgba(255,255,255,0.15)",
+                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                      cursor: equipped ? "pointer" : "default", minHeight: SLOT_PX,
+                    }}
+                    title={equipped ? `${equipped.name} — click to unequip` : es.label}
+                    onClick={() => { if (equipped) roomRef.current?.send("unequip_item", { slot: es.slot }); }}
+                    >
+                      <span style={{ fontSize: 20 }}>{equipped ? equipped.icon : es.icon}</span>
+                      <span style={{ fontSize: 8, color: equipped ? "#2ecc71" : "#555", marginTop: 2 }}>{es.label}</span>
+                      {equipped && (
+                        <span style={{ fontSize: 8, color: "#aaa", marginTop: 1 }}>{equipped.name.split(" ")[0]}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Inventory grid */}
               <div style={{
                 display: "grid",
                 gridTemplateColumns: `repeat(${GRID_COLS}, ${SLOT_PX}px)`,
@@ -1646,17 +1884,28 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               }}>
                 {slots.map((slot, i) => {
                   const item = slot ? ITEMS[slot.itemId] : null;
+                  const isEquippable = item?.equipSlot;
                   return (
                     <div key={i} style={{
                       width: SLOT_PX, height: SLOT_PX, borderRadius: 6,
-                      background: slot ? "rgba(139,92,246,0.15)" : "rgba(255,255,255,0.04)",
-                      border: slot ? "1px solid rgba(139,92,246,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                      background: slot ? (isEquippable ? "rgba(46,204,113,0.1)" : "rgba(139,92,246,0.15)") : "rgba(255,255,255,0.04)",
+                      border: slot ? (isEquippable ? "1px solid rgba(46,204,113,0.3)" : "1px solid rgba(139,92,246,0.4)") : "1px solid rgba(255,255,255,0.08)",
                       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
                       position: "relative", cursor: slot ? "pointer" : "default",
                       transition: "background 0.15s",
                     }}
-                    onMouseOver={(e) => { if (slot) e.currentTarget.style.background = "rgba(139,92,246,0.3)"; }}
-                    onMouseOut={(e) => { if (slot) e.currentTarget.style.background = "rgba(139,92,246,0.15)"; }}
+                    title={item ? (isEquippable ? `${item.name} — click to equip` : item.name) : ""}
+                    onClick={() => {
+                      if (slot && item) {
+                        if (item.equipSlot) {
+                          roomRef.current?.send("equip_item", { itemId: slot.itemId });
+                        } else if (item.effect) {
+                          roomRef.current?.send("use_potion", { itemId: slot.itemId });
+                        }
+                      }
+                    }}
+                    onMouseOver={(e) => { if (slot) e.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.25)" : "rgba(139,92,246,0.3)"; }}
+                    onMouseOut={(e) => { if (slot) e.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.1)" : "rgba(139,92,246,0.15)"; }}
                     >
                       {item && (
                         <>
@@ -1669,31 +1918,23 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                               textShadow: "0 0 3px rgba(0,0,0,0.8)",
                             }}>×{slot!.quantity}</span>
                           )}
+                          {isEquippable && (
+                            <span style={{
+                              position: "absolute", top: 2, right: 4,
+                              fontSize: 8, color: "#2ecc71",
+                            }}>EQ</span>
+                          )}
                         </>
                       )}
                     </div>
                   );
                 })}
               </div>
-              {/* Use buttons for consumables */}
-              <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {me.inventory.filter(s => s.quantity > 0 && ITEMS[s.itemId]?.effect).map((slot, i) => {
-                  const item = ITEMS[slot.itemId];
-                  if (!item) return null;
-                  return (
-                    <button key={i} onClick={() => {
-                      roomRef.current?.send("use_potion", { itemId: slot.itemId });
-                    }} style={{
-                      padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(139,92,246,0.5)",
-                      background: "rgba(139,92,246,0.2)", color: "#e2e8f0",
-                      cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", gap: 4,
-                    }}>
-                      <span>{item.icon}</span> Use {item.name} <span style={{ color: "#a78bfa" }}>×{slot.quantity}</span>
-                    </button>
-                  );
-                })}
+              {/* Use/equip hint */}
+              <div style={{ marginTop: 8, color: "#64748b", fontSize: 10, textAlign: "center" }}>
+                Click items to use/equip • Click equipped items to unequip
               </div>
-              <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ color: "#64748b", fontSize: 11 }}>{me.inventory.filter(s => s.quantity > 0).length}/{GRID_COLS * GRID_ROWS} slots</span>
                 <button onClick={() => setInventoryOpen(false)} style={{
                   padding: "5px 14px", borderRadius: 6,
@@ -1724,7 +1965,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                     <span style={{ fontSize: 24 }}>{item.icon}</span>
                     <div>
                       <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
-                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : `+${item.effect?.mp} MP`}</div>
+                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : item.effect?.mp ? `+${item.effect.mp} MP` : item.equipBonus ? [item.equipBonus.atk && `+${item.equipBonus.atk} ATK`, item.equipBonus.def && `+${item.equipBonus.def} DEF`, item.equipBonus.maxHp && `+${item.equipBonus.maxHp} HP`, item.equipBonus.maxMp && `+${item.equipBonus.maxMp} MP`].filter(Boolean).join(", ") : ""}</div>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

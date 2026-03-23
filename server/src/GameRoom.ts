@@ -3,6 +3,8 @@ import { Schema, MapSchema, type } from "@colyseus/schema";
 import { PlayerState } from "./PlayerState";
 import { SlimeState } from "./SlimeState";
 import { WolfState } from "./WolfState";
+import { GoblinState } from "./GoblinState";
+import { SkeletonState } from "./SkeletonState";
 import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
 import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
@@ -176,6 +178,18 @@ function applyDefense(rawDamage: number, defense: number): number {
   return Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
 }
 
+function checkLevelUp(player: PlayerState, room: GameRoom, sessionId: string) {
+  const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+  const newLevel = levelFromXp(player.xp);
+  if (newLevel > player.level) {
+    player.level = newLevel;
+    recalcEquipBonuses(player);
+    player.hp = player.maxHp;
+    player.mp = player.maxMp;
+    room.broadcast("levelup", { sessionId, name: player.name, level: newLevel });
+  }
+}
+
 // Class configs
 const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
   warrior: { range: 1, attackBase: 30, hpBase: 120, attackInterval: 1000, mpBase: 40 },
@@ -199,6 +213,32 @@ const WOLF_MOVE_INTERVAL_MS = 500; // slightly faster than player movement
 const WOLF_ATTACK_INTERVAL_MS = 1500;
 const WOLF_RESPAWN_MS = 30000;
 const WOLF_SPAWN_COUNT = 8;
+
+// Goblin constants
+const GOBLIN_HP = 80;
+const GOBLIN_ATK = 15;
+const GOBLIN_XP = 50;
+const GOBLIN_CHASE_RANGE = 6;
+const GOBLIN_LEASH_RANGE = 12;
+const GOBLIN_MOVE_INTERVAL_MS = 450;
+const GOBLIN_ATTACK_INTERVAL_MS = 1400;
+const GOBLIN_RESPAWN_MS = 25000;
+const GOBLIN_SPAWN_COUNT = 6;
+const GOBLIN_GOLD_MIN = 10;
+const GOBLIN_GOLD_MAX = 25;
+
+// Skeleton constants
+const SKELETON_HP = 200;
+const SKELETON_ATK = 30;
+const SKELETON_XP = 120;
+const SKELETON_CHASE_RANGE = 10;
+const SKELETON_LEASH_RANGE = 18;
+const SKELETON_MOVE_INTERVAL_MS = 600;
+const SKELETON_ATTACK_INTERVAL_MS = 2000;
+const SKELETON_RESPAWN_MS = 45000;
+const SKELETON_SPAWN_COUNT = 4;
+const SKELETON_GOLD_MIN = 30;
+const SKELETON_GOLD_MAX = 60;
 
 const SLIME_TYPES = [
   { color: "#2ecc71", size: "small", hp: 30, xp: 15, name: "Green Slime" },
@@ -247,6 +287,8 @@ export class GameState extends Schema {
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
   @type({ map: SlimeState }) slimes = new MapSchema<SlimeState>();
   @type({ map: WolfState }) wolves = new MapSchema<WolfState>();
+  @type({ map: GoblinState }) goblins = new MapSchema<GoblinState>();
+  @type({ map: SkeletonState }) skeletons = new MapSchema<SkeletonState>();
 }
 
 function canWalk(tx: number, ty: number): boolean {
@@ -321,7 +363,7 @@ export class GameRoom extends Room<GameState> {
     return occupied;
   }
 
-  isTileOccupiedByMonster(newX: number, newY: number, excludeSlimeId?: string, excludeWolfId?: string): boolean {
+  isTileOccupiedByMonster(newX: number, newY: number, excludeSlimeId?: string, excludeWolfId?: string, excludeGoblinId?: string, excludeSkeletonId?: string): boolean {
     for (const [id, slime] of this.state.slimes) {
       if (id === excludeSlimeId || !slime.alive) continue;
       if (slime.x === newX && slime.y === newY) return true;
@@ -329,6 +371,14 @@ export class GameRoom extends Room<GameState> {
     for (const [id, wolf] of this.state.wolves) {
       if (id === excludeWolfId || !wolf.alive) continue;
       if (wolf.x === newX && wolf.y === newY) return true;
+    }
+    for (const [id, goblin] of this.state.goblins) {
+      if (id === excludeGoblinId || !goblin.alive) continue;
+      if (goblin.x === newX && goblin.y === newY) return true;
+    }
+    for (const [id, skeleton] of this.state.skeletons) {
+      if (id === excludeSkeletonId || !skeleton.alive) continue;
+      if (skeleton.x === newX && skeleton.y === newY) return true;
     }
     return false;
   }
@@ -348,11 +398,8 @@ export class GameRoom extends Room<GameState> {
 
     // Recalculate level after XP loss (may delevel)
     const newLevel = levelFromXp(player.xp);
-    const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
     player.level = newLevel;
-    player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
-    player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
-    player.attack = cfg.attackBase + (newLevel - 1) * 5;
+    recalcEquipBonuses(player);
 
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;
@@ -424,6 +471,19 @@ export class GameRoom extends Room<GameState> {
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
+        // Roll loot
+        const loot = rollLoot("slime");
+        const lootNames: string[] = [];
+        for (const drop of loot) {
+          if (addToInventory(player, drop.itemId, drop.quantity)) {
+            const it = ITEMS[drop.itemId];
+            lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
+          }
+        }
+        if (lootNames.length > 0) {
+          client.send("loot_received", { items: lootNames });
+        }
+
         this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
 
         this.clock.setTimeout(() => {
@@ -479,6 +539,19 @@ export class GameRoom extends Room<GameState> {
           player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
           player.mp = player.maxMp;
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
+        }
+
+        // Roll loot
+        const wolfLoot = rollLoot("wolf");
+        const wolfLootNames: string[] = [];
+        for (const drop of wolfLoot) {
+          if (addToInventory(player, drop.itemId, drop.quantity)) {
+            const it = ITEMS[drop.itemId];
+            wolfLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
+          }
+        }
+        if (wolfLootNames.length > 0) {
+          client.send("loot_received", { items: wolfLootNames });
         }
 
         this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
@@ -543,6 +616,68 @@ export class GameRoom extends Room<GameState> {
           targetId: player.targetId, targetName: target.name, xp: xpGain,
         });
 
+      }
+      return;
+    }
+
+    // Try goblin target
+    const goblin = this.state.goblins.get(player.targetId);
+    if (goblin && goblin.alive) {
+      const d = dist(px, py, goblin.x, goblin.y);
+      if (d > cfg.range) return;
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      goblin.hp = Math.max(0, goblin.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblin.x + TILE_SIZE / 2, toY: goblin.y, attackerId: client.sessionId });
+      }
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+
+      if (goblin.hp <= 0) {
+        goblin.alive = false;
+        const goblinId = player.targetId;
+        player.targetId = "";
+        player.xp += GOBLIN_XP;
+        player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+        const newLevel = levelFromXp(player.xp);
+        if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+        const gLoot = rollLoot("goblin");
+        const gLootNames: string[] = [];
+        for (const drop of gLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; gLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
+        if (gLootNames.length > 0) client.send("loot_received", { items: gLootNames });
+        this.broadcast("kill", { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+        this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
+      }
+      return;
+    }
+
+    // Try skeleton target
+    const skeleton = this.state.skeletons.get(player.targetId);
+    if (skeleton && skeleton.alive) {
+      const d = dist(px, py, skeleton.x, skeleton.y);
+      if (d > cfg.range) return;
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      skeleton.hp = Math.max(0, skeleton.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skeleton.x + TILE_SIZE / 2, toY: skeleton.y, attackerId: client.sessionId });
+      }
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+
+      if (skeleton.hp <= 0) {
+        skeleton.alive = false;
+        const skeletonId = player.targetId;
+        player.targetId = "";
+        player.xp += SKELETON_XP;
+        player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+        const newLevel = levelFromXp(player.xp);
+        if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+        const sLoot = rollLoot("skeleton");
+        const sLootNames: string[] = [];
+        for (const drop of sLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; sLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
+        if (sLootNames.length > 0) client.send("loot_received", { items: sLootNames });
+        this.broadcast("kill", { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+        this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
       }
       return;
     }
@@ -756,6 +891,192 @@ export class GameRoom extends Room<GameState> {
         slime.y = newY;
       });
     }, SLIME_MOVE_INTERVAL_MS);
+
+    // Spawn goblins (in outer grasslands, NE/NW quadrants)
+    const goblinSpawns: { x: number; y: number }[] = [];
+    for (let attempt = 0; attempt < 300 && goblinSpawns.length < GOBLIN_SPAWN_COUNT; attempt++) {
+      const gx = Math.floor(Math.random() * MAP_W);
+      const gy = Math.floor(Math.random() * MAP_H);
+      if (gx >= 20 && gx <= 48 && gy >= 20 && gy <= 48) continue; // not near village
+      if (!canWalk(gx, gy)) continue;
+      if (goblinSpawns.some(g => Math.abs(g.x - gx) + Math.abs(g.y - gy) < 3)) continue;
+      goblinSpawns.push({ x: gx, y: gy });
+    }
+    (this as any)._goblinSpawns = goblinSpawns;
+    goblinSpawns.forEach((spawn, i) => {
+      const goblin = new GoblinState();
+      goblin.id = `goblin_${i}`;
+      goblin.x = spawn.x * TILE_SIZE;
+      goblin.y = spawn.y * TILE_SIZE;
+      goblin.spawnX = goblin.x;
+      goblin.spawnY = goblin.y;
+      const variants = ["normal", "normal", "normal", "archer", "shaman"];
+      goblin.variant = variants[i % variants.length];
+      goblin.hp = GOBLIN_HP;
+      goblin.maxHp = GOBLIN_HP;
+      goblin.alive = true;
+      this.state.goblins.set(goblin.id, goblin);
+    });
+
+    // Spawn skeletons (far edges, dangerous zones)
+    const skeletonSpawns: { x: number; y: number }[] = [];
+    for (let attempt = 0; attempt < 300 && skeletonSpawns.length < SKELETON_SPAWN_COUNT; attempt++) {
+      const sx = Math.floor(Math.random() * MAP_W);
+      const sy = Math.floor(Math.random() * MAP_H);
+      // Only in outer 12 tiles of map edges (dangerous border zone)
+      if (sx >= 12 && sx <= MAP_W - 12 && sy >= 12 && sy <= MAP_H - 12) continue;
+      if (!canWalk(sx, sy)) continue;
+      if (skeletonSpawns.some(s => Math.abs(s.x - sx) + Math.abs(s.y - sy) < 5)) continue;
+      skeletonSpawns.push({ x: sx, y: sy });
+    }
+    (this as any)._skeletonSpawns = skeletonSpawns;
+    skeletonSpawns.forEach((spawn, i) => {
+      const skeleton = new SkeletonState();
+      skeleton.id = `skeleton_${i}`;
+      skeleton.x = spawn.x * TILE_SIZE;
+      skeleton.y = spawn.y * TILE_SIZE;
+      skeleton.spawnX = skeleton.x;
+      skeleton.spawnY = skeleton.y;
+      skeleton.hp = SKELETON_HP;
+      skeleton.maxHp = SKELETON_HP;
+      skeleton.alive = true;
+      this.state.skeletons.set(skeleton.id, skeleton);
+    });
+
+    // Goblin AI — aggressive, faster than wolves
+    const goblinLastAttack = new Map<string, number>();
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.goblins.forEach((goblin) => {
+        if (!goblin.alive) return;
+        const gtx = Math.round(goblin.x / TILE_SIZE);
+        const gty = Math.round(goblin.y / TILE_SIZE);
+
+        let closest: PlayerState | null = null;
+        let closestSid = "";
+        let closestDist = Infinity;
+        this.state.players.forEach((p, sid) => {
+          if (p.hp <= 0) return;
+          const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - gtx), Math.abs(Math.round(p.y / TILE_SIZE) - gty));
+          if (d <= GOBLIN_CHASE_RANGE && d < closestDist) {
+            closest = p; closestSid = sid; closestDist = d;
+          }
+        });
+
+        if (!closest && goblin.targetPlayerId) {
+          const tracked = this.state.players.get(goblin.targetPlayerId);
+          if (tracked && tracked.hp > 0) {
+            const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - gtx), Math.abs(Math.round(tracked.y / TILE_SIZE) - gty));
+            if (d <= GOBLIN_LEASH_RANGE) { closest = tracked; closestSid = goblin.targetPlayerId; closestDist = d; }
+          }
+        }
+
+        if (!closest) {
+          goblin.targetPlayerId = "";
+          if (Math.random() > 0.4) return;
+          const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nx = goblin.x + dir.dx * TILE_SIZE, ny = goblin.y + dir.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) return;
+          if (ntx >= 28 && ntx <= 44 && nty >= 28 && nty <= 44) return;
+          goblin.x = nx; goblin.y = ny;
+          return;
+        }
+
+        goblin.targetPlayerId = closestSid;
+
+        if (closestDist <= 1) {
+          if (isProtectionZone(closest.x, closest.y)) return;
+          const last = goblinLastAttack.get(goblin.id) || 0;
+          if (now - last >= GOBLIN_ATTACK_INTERVAL_MS) {
+            goblinLastAttack.set(goblin.id, now);
+            const rawDmg = GOBLIN_ATK + Math.floor(Math.random() * 8);
+            const damage = applyDefense(rawDmg, closest.defense);
+            closest.hp = Math.max(0, closest.hp - damage);
+            this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id });
+            if (closest.hp <= 0) {
+              goblin.targetPlayerId = "";
+              this.broadcast("kill", { targetId: closestSid, killerId: goblin.id, killerName: "Goblin", xp: 0 });
+            }
+          }
+          return;
+        }
+
+        const ptx = Math.round(closest.x / TILE_SIZE), pty = Math.round(closest.y / TILE_SIZE);
+        const step = bfsNextStep(gtx, gty, ptx, pty, GOBLIN_LEASH_RANGE);
+        if (step && !this.isTileOccupiedByMonster(step.x * TILE_SIZE, step.y * TILE_SIZE, undefined, undefined, goblin.id)) {
+          goblin.x = step.x * TILE_SIZE; goblin.y = step.y * TILE_SIZE;
+        }
+      });
+    }, GOBLIN_MOVE_INTERVAL_MS);
+
+    // Skeleton AI — slow but deadly, high range
+    const skeletonLastAttack = new Map<string, number>();
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.skeletons.forEach((skeleton) => {
+        if (!skeleton.alive) return;
+        const stx = Math.round(skeleton.x / TILE_SIZE);
+        const sty = Math.round(skeleton.y / TILE_SIZE);
+
+        let closest: PlayerState | null = null;
+        let closestSid = "";
+        let closestDist = Infinity;
+        this.state.players.forEach((p, sid) => {
+          if (p.hp <= 0) return;
+          const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - stx), Math.abs(Math.round(p.y / TILE_SIZE) - sty));
+          if (d <= SKELETON_CHASE_RANGE && d < closestDist) {
+            closest = p; closestSid = sid; closestDist = d;
+          }
+        });
+
+        if (!closest && skeleton.targetPlayerId) {
+          const tracked = this.state.players.get(skeleton.targetPlayerId);
+          if (tracked && tracked.hp > 0) {
+            const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - stx), Math.abs(Math.round(tracked.y / TILE_SIZE) - sty));
+            if (d <= SKELETON_LEASH_RANGE) { closest = tracked; closestSid = skeleton.targetPlayerId; closestDist = d; }
+          }
+        }
+
+        if (!closest) {
+          skeleton.targetPlayerId = "";
+          if (Math.random() > 0.2) return;
+          const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nx = skeleton.x + dir.dx * TILE_SIZE, ny = skeleton.y + dir.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) return;
+          skeleton.x = nx; skeleton.y = ny;
+          return;
+        }
+
+        skeleton.targetPlayerId = closestSid;
+
+        if (closestDist <= 1) {
+          if (isProtectionZone(closest.x, closest.y)) return;
+          const last = skeletonLastAttack.get(skeleton.id) || 0;
+          if (now - last >= SKELETON_ATTACK_INTERVAL_MS) {
+            skeletonLastAttack.set(skeleton.id, now);
+            const rawDmg = SKELETON_ATK + Math.floor(Math.random() * 12);
+            const damage = applyDefense(rawDmg, closest.defense);
+            closest.hp = Math.max(0, closest.hp - damage);
+            this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id });
+            if (closest.hp <= 0) {
+              skeleton.targetPlayerId = "";
+              this.broadcast("kill", { targetId: closestSid, killerId: skeleton.id, killerName: "Skeleton", xp: 0 });
+            }
+          }
+          return;
+        }
+
+        const ptx = Math.round(closest.x / TILE_SIZE), pty = Math.round(closest.y / TILE_SIZE);
+        const step = bfsNextStep(stx, sty, ptx, pty, SKELETON_LEASH_RANGE);
+        if (step && !this.isTileOccupiedByMonster(step.x * TILE_SIZE, step.y * TILE_SIZE, undefined, undefined, undefined, skeleton.id)) {
+          skeleton.x = step.x * TILE_SIZE; skeleton.y = step.y * TILE_SIZE;
+        }
+      });
+    }, SKELETON_MOVE_INTERVAL_MS);
 
     // Auto-attack tick — runs frequently, each player attacks on their own interval
     this.clock.setInterval(() => {
@@ -1006,6 +1327,25 @@ export class GameRoom extends Room<GameState> {
       player.gold += item.sellPrice * qty;
     });
 
+    // ── Equip item ──
+    this.onMessage("equip_item", (client, data: { itemId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const item = ITEMS[data.itemId];
+      if (!item || !item.equipSlot) return;
+      if (countInInventory(player, data.itemId) <= 0) return;
+      equipItem(player, data.itemId);
+    });
+
+    // ── Unequip item ──
+    this.onMessage("unequip_item", (client, data: { slot: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const validSlots = ["weapon", "helmet", "chest", "legs", "boots"];
+      if (!validSlots.includes(data.slot)) return;
+      unequipItem(player, data.slot as EquipSlot);
+    });
+
     // ── Power Shot (Ranger) — extra arrow that doesn't reset attack timer ──
     this.onMessage("power_shot", (client) => {
       const player = this.state.players.get(client.sessionId);
@@ -1133,6 +1473,44 @@ export class GameRoom extends Room<GameState> {
         }
       });
 
+      // Hit all adjacent goblins
+      this.state.goblins.forEach((goblin, goblinId) => {
+        if (!goblin.alive) return;
+        const d = dist(px, py, goblin.x, goblin.y);
+        if (d > 1) return;
+        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        goblin.hp = Math.max(0, goblin.hp - damage);
+        goblin.targetPlayerId = client.sessionId;
+        this.broadcast("hit", { targetId: goblinId, damage, attackerId: client.sessionId });
+        hitCount++;
+        if (goblin.hp <= 0) {
+          goblin.alive = false; goblin.targetPlayerId = "";
+          if (player.targetId === goblinId) player.targetId = "";
+          player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+          this.broadcast("kill", { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+          this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
+        }
+      });
+
+      // Hit all adjacent skeletons
+      this.state.skeletons.forEach((skeleton, skeletonId) => {
+        if (!skeleton.alive) return;
+        const d = dist(px, py, skeleton.x, skeleton.y);
+        if (d > 1) return;
+        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        skeleton.hp = Math.max(0, skeleton.hp - damage);
+        skeleton.targetPlayerId = client.sessionId;
+        this.broadcast("hit", { targetId: skeletonId, damage, attackerId: client.sessionId });
+        hitCount++;
+        if (skeleton.hp <= 0) {
+          skeleton.alive = false; skeleton.targetPlayerId = "";
+          if (player.targetId === skeletonId) player.targetId = "";
+          player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+          this.broadcast("kill", { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+          this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
+        }
+      });
+
       // Hit all adjacent players (no PvP in protection zone)
       if (!isProtectionZone(px, py)) this.state.players.forEach((target, sid) => {
         if (sid === client.sessionId || target.hp <= 0) return;
@@ -1157,7 +1535,7 @@ export class GameRoom extends Room<GameState> {
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
-  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean; savedGold?: number; savedInventory?: Array<{itemId: string; quantity: number}> }) {
+  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean; savedGold?: number; savedInventory?: Array<{itemId: string; quantity: number}>; savedEquipment?: Record<string, string> }) {
     const player = new PlayerState();
     const cls = (options.playerClass === "ranger") ? "ranger" : "warrior";
     const cfg = CLASS_CONFIG[cls];
@@ -1174,13 +1552,8 @@ export class GameRoom extends Room<GameState> {
     player.direction = "down";
     player.moving = false;
     player.playerClass = cls;
-    player.hp = cfg.hpBase + (level - 1) * 20;
-    player.maxHp = cfg.hpBase + (level - 1) * 20;
-    player.mp = cfg.mpBase + (level - 1) * 10;
-    player.maxMp = cfg.mpBase + (level - 1) * 10;
     player.xp = xp;
     player.level = level;
-    player.attack = cfg.attackBase + (level - 1) * 5;
     player.targetId = "";
     player.gold = Math.max(0, Math.min(options.savedGold || 0, 10000000));
 
@@ -1192,6 +1565,21 @@ export class GameRoom extends Room<GameState> {
         }
       }
     }
+
+    // Restore equipment
+    if (options.savedEquipment) {
+      const eq = options.savedEquipment;
+      if (eq.weapon && ITEMS[eq.weapon]?.equipSlot === "weapon") player.equipWeapon = eq.weapon;
+      if (eq.helmet && ITEMS[eq.helmet]?.equipSlot === "helmet") player.equipHelmet = eq.helmet;
+      if (eq.chest && ITEMS[eq.chest]?.equipSlot === "chest") player.equipChest = eq.chest;
+      if (eq.legs && ITEMS[eq.legs]?.equipSlot === "legs") player.equipLegs = eq.legs;
+      if (eq.boots && ITEMS[eq.boots]?.equipSlot === "boots") player.equipBoots = eq.boots;
+    }
+
+    // Calculate stats with equipment bonuses
+    recalcEquipBonuses(player);
+    player.hp = player.maxHp;
+    player.mp = player.maxMp;
 
     this.state.players.set(client.sessionId, player);
     lastMoveTime.set(client.sessionId, 0);

@@ -18,6 +18,7 @@ export async function joinGame(name: string, playerClass: string, isHardcore: bo
   let savedXp = 0;
   let savedGold = 0;
   let savedInventory: Array<{itemId: string; quantity: number}> = [];
+  let savedEquipment: Record<string, string> = {};
   try {
     const raw = localStorage.getItem("mmo_character");
     if (raw) {
@@ -26,11 +27,12 @@ export async function joinGame(name: string, playerClass: string, isHardcore: bo
         savedXp = saved.xp || 0;
         savedGold = saved.gold || 0;
         savedInventory = saved.inventory || [];
+        savedEquipment = saved.equipment || {};
       }
     }
   } catch {}
   try {
-    room = await c.joinOrCreate("game", { name, playerClass, savedXp, isHardcore, savedGold, savedInventory });
+    room = await c.joinOrCreate("game", { name, playerClass, savedXp, isHardcore, savedGold, savedInventory, savedEquipment });
     return room;
   } catch (err: any) {
     console.error("Join failed:", err);
