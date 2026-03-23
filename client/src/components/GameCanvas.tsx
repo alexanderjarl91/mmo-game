@@ -70,10 +70,10 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string } | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
-  const charSpriteRef = useRef<HTMLImageElement | null>(null);
+  const warriorSpriteRef = useRef<HTMLImageElement | null>(null);
+  const rangerSpriteRef = useRef<HTMLImageElement | null>(null);
   const grassTileRef = useRef<HTMLImageElement | null>(null);
   const grassTile2Ref = useRef<HTMLImageElement | null>(null);
-  const tintCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const tileCacheRef = useRef<HTMLCanvasElement | null>(null);
 
   const lastMoveTimeRef = useRef(0);
@@ -99,17 +99,26 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   useEffect(() => {
     const load = (src: string): Promise<HTMLImageElement> =>
       new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(img); img.src = src; });
-    Promise.all([load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png")]).then(([char, grass, grass2]) => {
-      charSpriteRef.current = char.complete && char.naturalWidth ? char : null;
+    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png")]).then(([warrior, ranger, npc, grass, grass2]) => {
+      warriorSpriteRef.current = warrior.complete && warrior.naturalWidth ? warrior : null;
+      rangerSpriteRef.current = ranger.complete && ranger.naturalWidth ? ranger : null;
+      npcSpriteRef.current = npc.complete && npc.naturalWidth ? npc : null;
       grassTileRef.current = grass.complete && grass.naturalWidth ? grass : null;
       grassTile2Ref.current = grass2.complete && grass2.naturalWidth ? grass2 : null;
     });
   }, []);
 
+  const npcSpriteRef = useRef<HTMLImageElement | null>(null);
+  const tintCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+
+  const getClassSprite = (cls: string): HTMLImageElement | null => {
+    return cls === "ranger" ? rangerSpriteRef.current : warriorSpriteRef.current;
+  };
+
   const getTintedSprite = (color: string): HTMLCanvasElement | null => {
     const cached = tintCacheRef.current.get(color);
     if (cached) return cached;
-    const src = charSpriteRef.current;
+    const src = npcSpriteRef.current;
     if (!src) return null;
     const c = document.createElement("canvas");
     c.width = src.width; c.height = src.height;
@@ -666,12 +675,12 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
         ctx.beginPath(); ctx.ellipse(px, py + 20, 18, 6, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
 
-        const tinted = getTintedSprite(p.color);
-        if (tinted) {
+        const sprite = getClassSprite(p.playerClass);
+        if (sprite) {
           const row = DIR_ROW[p.direction] ?? DIR_ROW.down;
           let frame = 0;
           if (p.moveStartTime > 0 || p.moving) frame = Math.floor(time / ANIM_SPEED) % (WALK_FRAMES - 1) + 1;
-          ctx.drawImage(tinted, frame * SPRITE_W, row * SPRITE_H, SPRITE_W, SPRITE_H, px - 48, py - 56, 96, 96);
+          ctx.drawImage(sprite, frame * SPRITE_W, row * SPRITE_H, SPRITE_W, SPRITE_H, px - 48, py - 56, 96, 96);
           if (sid === sessionIdRef.current) {
             ctx.beginPath(); ctx.ellipse(px, py + 16, 22, 8, 0, 0, Math.PI * 2);
             ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 2; ctx.stroke();
