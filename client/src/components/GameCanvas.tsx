@@ -696,8 +696,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          const ts = TILE_SIZE * 0.55 * sizeScale;
-          ctx.strokeRect(sx - ts, sy - ts + 4, ts * 2, ts * 2);
+          ctx.strokeRect(sx - TILE_SIZE / 2, sy - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
         }
 
         // Shadow
@@ -754,7 +753,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(wx - 24, wy - 20, 48, 44);
+          ctx.strokeRect(wx - TILE_SIZE / 2, wy - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
         }
 
         // Shadow
@@ -854,7 +853,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(px - 28, py - 28, 56, 56);
+          ctx.strokeRect(px - TILE_SIZE / 2, py - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
         }
 
         // Shadow

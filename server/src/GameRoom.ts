@@ -168,6 +168,18 @@ export class GameRoom extends Room<GameState> {
     return occupied;
   }
 
+  isTileOccupiedByMonster(newX: number, newY: number, excludeSlimeId?: string, excludeWolfId?: string): boolean {
+    for (const [id, slime] of this.state.slimes) {
+      if (id === excludeSlimeId || !slime.alive) continue;
+      if (slime.x === newX && slime.y === newY) return true;
+    }
+    for (const [id, wolf] of this.state.wolves) {
+      if (id === excludeWolfId || !wolf.alive) continue;
+      if (wolf.x === newX && wolf.y === newY) return true;
+    }
+    return false;
+  }
+
   respawnPlayer(player: PlayerState) {
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;
@@ -492,7 +504,7 @@ export class GameRoom extends Room<GameState> {
         const ptx = Math.round(closest.x / TILE_SIZE);
         const pty = Math.round(closest.y / TILE_SIZE);
         const step = bfsNextStep(wtx, wty, ptx, pty, WOLF_LEASH_RANGE);
-        if (step) {
+        if (step && !this.isTileOccupiedByMonster(step.x * TILE_SIZE, step.y * TILE_SIZE, undefined, wolf.id)) {
           wolf.x = step.x * TILE_SIZE;
           wolf.y = step.y * TILE_SIZE;
         }
@@ -547,7 +559,7 @@ export class GameRoom extends Room<GameState> {
           const ptx = Math.round(target.x / TILE_SIZE);
           const pty = Math.round(target.y / TILE_SIZE);
           const step = bfsNextStep(stx, sty, ptx, pty, SLIME_CHASE_RANGE);
-          if (step) {
+          if (step && !this.isTileOccupiedByMonster(step.x * TILE_SIZE, step.y * TILE_SIZE, slimeId)) {
             slime.x = step.x * TILE_SIZE;
             slime.y = step.y * TILE_SIZE;
           }
@@ -564,6 +576,7 @@ export class GameRoom extends Room<GameState> {
         if (!canWalk(tx, ty)) return;
         if (tx >= 28 && tx <= 44 && ty >= 28 && ty <= 44) return;
         if (NPCS.some(n => n.x === tx && n.y === ty)) return;
+        if (this.isTileOccupiedByMonster(newX, newY, slimeId)) return;
         slime.x = newX;
         slime.y = newY;
       });
