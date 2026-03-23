@@ -20,6 +20,7 @@ interface PlayerData {
   isHardcore: boolean;
   gold: number;
   inventory: Array<{ itemId: string; quantity: number }>;
+  deathTime: number; // when hp first hit 0
 }
 
 interface SlimeData {
@@ -420,6 +421,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           isHardcore: player.isHardcore || false,
           gold: player.gold || 0,
           inventory: [],
+          deathTime: (player.hp || 100) <= 0 ? performance.now() : 0,
         };
         // Sync inventory
         if (player.inventory) {
@@ -459,6 +461,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.targetId = player.targetId || "";
           p.isHardcore = player.isHardcore || false;
           p.gold = player.gold || 0;
+          // Track death moment
+          if (player.hp <= 0 && p.deathTime === 0) p.deathTime = performance.now();
+          if (player.hp > 0) p.deathTime = 0;
           // Re-sync inventory
           p.inventory = [];
           if (player.inventory) {
@@ -978,6 +983,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.strokeRect(px - TILE_SIZE / 2, py - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
         }
 
+        // Death fade effect on entire player rendering
+        const isDying = p.hp <= 0 && p.deathTime > 0;
+        const deathFade = isDying ? Math.max(0.15, 1 - Math.min((now - p.deathTime) / 1500, 1) * 0.85) : 1;
+        if (isDying) { ctx.save(); ctx.globalAlpha = deathFade; }
+
         // Shadow
         ctx.beginPath(); ctx.ellipse(px, py + 16, 14, 5, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fill();
 
@@ -1012,13 +1022,30 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.fillStyle = "#3498db"; ctx.fillRect(px - mpW / 2, mpY, mpW * mpRatio, 3);
         }
 
-        // Dead overlay
-        if (p.hp <= 0) {
+        if (isDying) { ctx.restore(); }
+
+        // Death animation
+        if (p.hp <= 0 && p.deathTime > 0) {
+          const deathAge = now - p.deathTime;
+          const DEATH_FADE_MS = 1500;
+          const deathProgress = Math.min(deathAge / DEATH_FADE_MS, 1);
           ctx.save();
-          ctx.globalAlpha = 0.6;
+          // Red flash at the start
+          if (deathProgress < 0.2) {
+            ctx.globalAlpha = 0.4 * (1 - deathProgress / 0.2);
+            ctx.fillStyle = "#ff0000";
+            ctx.beginPath();
+            ctx.arc(px, py, 30, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          // Fade + fall
+          ctx.globalAlpha = Math.max(0.1, 1 - deathProgress * 0.8);
+          ctx.translate(px, py);
+          ctx.rotate(deathProgress * 1.2); // tilt over
+          ctx.translate(-px, -py);
           ctx.font = "24px serif";
           ctx.textAlign = "center";
-          ctx.fillText("💀", px, py + 5);
+          ctx.fillText("💀", px, py + 5 + deathProgress * 15);
           ctx.restore();
         }
       });
