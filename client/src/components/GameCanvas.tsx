@@ -926,7 +926,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         // MP bar (only for local player)
         if (sid === sessionIdRef.current) {
           const mpW = 40;
-          const mpY = py - 38;
+          const mpY = py - 42;
           ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(px - mpW / 2 - 1, mpY - 1, mpW + 2, 5);
           ctx.fillStyle = "#1a1a2e"; ctx.fillRect(px - mpW / 2, mpY, mpW, 3);
           const mpRatio = p.maxMp > 0 ? p.mp / p.maxMp : 0;
