@@ -1,0 +1,17 @@
+import { Schema, type } from "@colyseus/schema";
+
+export class PlayerState extends Schema {
+  @type("number") x: number = 0;
+  @type("number") y: number = 0;
+  @type("string") color: string = "#ffffff";
+  @type("string") name: string = "";
+  @type("string") direction: string = "down";
+  @type("boolean") moving: boolean = false;
+  @type("number") hp: number = 100;
+  @type("number") maxHp: number = 100;
+  @type("number") xp: number = 0;
+  @type("number") level: number = 1;
+  @type("number") attack: number = 25;
+  @type("string") playerClass: string = "warrior"; // warrior | ranger
+  @type("string") targetId: string = ""; // current attack target (slime id or player session id)
+}
