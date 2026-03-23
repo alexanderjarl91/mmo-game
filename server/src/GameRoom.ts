@@ -13,7 +13,15 @@ const SLIME_ATTACK_INTERVAL_MS = 2000;
 const SLIME_ATTACK_RANGE = 1;
 const SLIME_CHASE_RANGE = 8; // how far slime chases after aggro
 const SLIME_ATK = 8; // slime base damage
-const XP_PER_LEVEL = 100;
+// Tibia XP formula: total XP needed to reach level L = 50/3 * (L³ - 6L² + 17L - 12)
+function xpForLevel(level: number): number {
+  return Math.floor((50 / 3) * (level * level * level - 6 * level * level + 17 * level - 12));
+}
+function levelFromXp(xp: number): number {
+  let lvl = 1;
+  while (xpForLevel(lvl + 1) <= xp) lvl++;
+  return lvl;
+}
 const PLAYER_RESPAWN_MS = 5000;
 const SPAWN_TILE_X = 36;
 const SPAWN_TILE_Y = 37;
@@ -240,7 +248,7 @@ export class GameRoom extends Room<GameState> {
         const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
         player.xp += xpGain;
 
-        const newLevel = Math.floor(player.xp / XP_PER_LEVEL) + 1;
+        const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
           player.level = newLevel;
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
@@ -297,7 +305,7 @@ export class GameRoom extends Room<GameState> {
         const xpGain = WOLF_XP;
         player.xp += xpGain;
 
-        const newLevel = Math.floor(player.xp / XP_PER_LEVEL) + 1;
+        const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
           player.level = newLevel;
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
@@ -356,7 +364,7 @@ export class GameRoom extends Room<GameState> {
         player.xp += xpGain;
         player.targetId = "";
 
-        const newLevel = Math.floor(player.xp / XP_PER_LEVEL) + 1;
+        const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
           player.level = newLevel;
           player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
@@ -757,8 +765,8 @@ export class GameRoom extends Room<GameState> {
     const cfg = CLASS_CONFIG[cls];
 
     // Restore saved progress
-    const xp = Math.max(0, Math.min(options.savedXp || 0, 10000)); // cap at level 100
-    const level = Math.floor(xp / XP_PER_LEVEL) + 1;
+    const xp = Math.max(0, Math.min(options.savedXp || 0, 1000000)); // cap XP
+    const level = levelFromXp(xp);
 
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;

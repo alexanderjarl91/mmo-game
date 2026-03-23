@@ -66,6 +66,11 @@ const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 const HEAL_COST = 20;
 
+// Tibia XP formula
+function xpForLevel(level: number): number {
+  return Math.floor((50 / 3) * (level * level * level - 6 * level * level + 17 * level - 12));
+}
+
 interface Projectile { fromX: number; fromY: number; toX: number; toY: number; time: number; }
 
 interface Props { playerName: string; playerClass: string; }
@@ -505,7 +510,13 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
     });
 
     if (bestId) {
-      sendSetTarget(bestId);
+      // If clicking the same target, toggle it off
+      const currentTarget = me.targetId || "";
+      if (currentTarget === bestId) {
+        sendClearTarget();
+      } else {
+        sendSetTarget(bestId);
+      }
     } else {
       sendClearTarget();
     }
@@ -1031,12 +1042,15 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           // XP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
           ctx.fillText(`XP`, 10, barY + 32);
-          const xpInLevel = me.xp % 100;
+          const currentLvlXp = xpForLevel(me.level);
+          const nextLvlXp = xpForLevel(me.level + 1);
+          const xpInLevel = me.xp - currentLvlXp;
+          const xpNeeded = nextLvlXp - currentLvlXp;
           ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(34, barY + 24, 122, 7);
           ctx.fillStyle = "#1a1a2e"; ctx.fillRect(35, barY + 25, 120, 5);
-          ctx.fillStyle = "#f1c40f"; ctx.fillRect(35, barY + 25, 120 * (xpInLevel / 100), 5);
+          ctx.fillStyle = "#f1c40f"; ctx.fillRect(35, barY + 25, 120 * (xpInLevel / xpNeeded), 5);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`Lv.${me.level} (${xpInLevel}/100)`, 165, barY + 32);
+          ctx.fillText(`Lv.${me.level} (${xpInLevel}/${xpNeeded})`, 165, barY + 32);
 
         }
 
@@ -1166,7 +1180,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       {/* Mobile stats overlay */}
       {isMobile && myStats && (
         <div style={{ position: "absolute", top: 10, left: 10, background: "rgba(0,0,0,0.6)", borderRadius: 8, padding: "6px 10px", zIndex: 10, color: "#fff", fontSize: 11 }}>
-          <div>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level} | HP: {myStats.hp}/{myStats.maxHp} | XP: {myStats.xp % 100}/100</div>
+          <div>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level} | HP: {myStats.hp}/{myStats.maxHp} | XP: {myStats.xp - xpForLevel(myStats.level)}/{xpForLevel(myStats.level + 1) - xpForLevel(myStats.level)}</div>
         </div>
       )}
 
