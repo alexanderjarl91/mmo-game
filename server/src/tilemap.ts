@@ -300,9 +300,9 @@ export const NPCS: NPCDef[] = [
     color: "#4caf50",
     direction: "down",
     dialogue: [
-      "Wares for sale! Well... soon anyway.",
-      "I'm still setting up shop.",
-      "Check back when I have inventory!",
+      "Welcome to Pip's Potions! Press E to browse.",
+      "Health potions, mana potions — I've got what you need!",
+      "Kill some monsters and come back with gold!",
     ],
   },
   {

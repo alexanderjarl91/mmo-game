@@ -18,6 +18,8 @@ interface PlayerData {
   playerClass: string;
   targetId: string;
   isHardcore: boolean;
+  gold: number;
+  inventory: Array<{ itemId: string; quantity: number }>;
 }
 
 interface SlimeData {
@@ -66,6 +68,14 @@ const DIR_ROW: Record<string, number> = { up: 8, left: 9, down: 10, right: 11 };
 const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8, TEMPLE: 9 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 const HEAL_COST = 20;
+const POTION_COOLDOWN_MS = 2000;
+
+// Item definitions (mirror server)
+const ITEMS: Record<string, { name: string; icon: string; buyPrice: number; sellPrice: number; effect?: { hp?: number; mp?: number } }> = {
+  health_potion: { name: "Health Potion", icon: "❤️", buyPrice: 50, sellPrice: 25, effect: { hp: 50 } },
+  mana_potion: { name: "Mana Potion", icon: "💙", buyPrice: 30, sellPrice: 15, effect: { mp: 30 } },
+};
+const SHOP_ITEMS = ["health_potion", "mana_potion"];
 
 // Tibia XP formula
 function xpForLevel(level: number): number {
@@ -87,8 +97,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const lastPotionUse = useRef(0);
   const [chatText, setChatText] = useState("");
-  const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string; isHardcore: boolean } | null>(null);
+  const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string; isHardcore: boolean; gold: number } | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
   const warriorSpriteRef = useRef<HTMLImageElement | null>(null);
@@ -360,6 +372,20 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
+      room.onMessage("mana_effect", (data: { sessionId: string; amount: number }) => {
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          damageNumbersRef.current.push({
+            x: p.displayX + TILE_SIZE / 2,
+            y: p.displayY - 10,
+            damage: data.amount,
+            time: performance.now(),
+            color: "#3498db",
+            prefix: "+",
+          });
+        }
+      });
+
       room.onMessage("cleave_effect", (data: { sessionId: string; x: number; y: number; hits: number }) => {
         const p = playersRef.current.get(data.sessionId);
         if (p) {
@@ -391,7 +417,25 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           playerClass: player.playerClass || "warrior",
           targetId: player.targetId || "",
           isHardcore: player.isHardcore || false,
+          gold: player.gold || 0,
+          inventory: [],
         };
+        // Sync inventory
+        if (player.inventory) {
+          data.inventory = [];
+          for (let i = 0; i < player.inventory.length; i++) {
+            const slot = player.inventory[i];
+            if (slot) data.inventory.push({ itemId: slot.itemId, quantity: slot.quantity });
+          }
+          player.inventory.onAdd((slot: any) => {
+            const p = playersRef.current.get(sessionId);
+            if (p) { p.inventory = []; for (let j = 0; j < player.inventory.length; j++) { const s = player.inventory[j]; if (s) p.inventory.push({ itemId: s.itemId, quantity: s.quantity }); } }
+          });
+          player.inventory.onRemove(() => {
+            const p = playersRef.current.get(sessionId);
+            if (p) { p.inventory = []; for (let j = 0; j < player.inventory.length; j++) { const s = player.inventory[j]; if (s) p.inventory.push({ itemId: s.itemId, quantity: s.quantity }); } }
+          });
+        }
         playersRef.current.set(sessionId, data);
 
         player.onChange(() => {
@@ -413,6 +457,15 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.playerClass = player.playerClass || "warrior";
           p.targetId = player.targetId || "";
           p.isHardcore = player.isHardcore || false;
+          p.gold = player.gold || 0;
+          // Re-sync inventory
+          p.inventory = [];
+          if (player.inventory) {
+            for (let j = 0; j < player.inventory.length; j++) {
+              const s = player.inventory[j];
+              if (s) p.inventory.push({ itemId: s.itemId, quantity: s.quantity });
+            }
+          }
         });
       });
       room.state.players.onRemove((_: any, sid: string) => { playersRef.current.delete(sid); });
@@ -558,7 +611,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const dist = Math.abs(px - npc.x) + Math.abs(py - npc.y);
       if (dist <= 2 && dist < closestDist) { closest = npc; closestDist = dist; }
     }
-    if (closest) roomRef.current?.send("npc_talk", { npcId: closest.id });
+    if (closest) {
+      if (closest.id === "merchant") {
+        setShopOpen(prev => !prev);
+      } else {
+        roomRef.current?.send("npc_talk", { npcId: closest.id });
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -569,6 +628,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           setChatOpen(false); canvasRef.current?.focus(); return;
         } else { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); return; }
       }
+      if (e.key === "Escape" && shopOpen) { setShopOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && chatOpen) { setChatOpen(false); setChatText(""); canvasRef.current?.focus(); return; }
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
@@ -578,6 +638,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const me = playersRef.current.get(sessionIdRef.current);
         if (me?.playerClass === "ranger") roomRef.current?.send("power_shot");
         else roomRef.current?.send("cleave");
+        return;
+      }
+      if (e.key === "3") {
+        const now = Date.now();
+        if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
+          roomRef.current?.send("use_potion", { itemId: "health_potion" });
+          lastPotionUse.current = now;
+        }
+        return;
+      }
+      if (e.key === "4") {
+        const now = Date.now();
+        if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
+          roomRef.current?.send("use_potion", { itemId: "mana_potion" });
+          lastPotionUse.current = now;
+        }
         return;
       }
       if (["w","a","s","d","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
@@ -1089,6 +1165,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
           ctx.fillText(`Lv.${me.level} (${xpInLevel}/${xpNeeded})`, 165, barY + 32);
 
+          // Gold
+          ctx.font = "bold 12px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#f1c40f";
+          ctx.textAlign = "left";
+          ctx.fillText(`💰 ${me.gold}`, 10, barY + 46);
         }
 
         // ── Spell bar (centered bottom) ────────────────
@@ -1104,8 +1185,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const spells = [
           { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp },
           { key: "2", icon: isRanger ? "🏹" : "⚔️", name: isRanger ? "P.Shot" : "Cleave", cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (isRanger ? !!me.targetId : true) },
-          { key: "3", icon: "", name: "", cost: 0, active: false, canUse: false },
-          { key: "4", icon: "", name: "", cost: 0, active: false, canUse: false },
+          { key: "3", icon: "❤️", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0) },
+          { key: "4", icon: "💙", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0) },
         ];
 
         for (let i = 0; i < spells.length; i++) {
@@ -1140,12 +1221,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             ctx.fillText("—", sx + SLOT_SIZE / 2, barBY + 28);
           }
 
-          // Mana cost
+          // Mana cost or potion count
           if (spell.active && spell.cost > 0) {
             ctx.font = "9px 'Segoe UI', sans-serif";
             ctx.fillStyle = spell.canUse ? "#7ec8e3" : "rgba(126,200,227,0.4)";
             ctx.textAlign = "center";
             ctx.fillText(`${spell.cost} MP`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
+          } else if (spell.active && (spell as any).count !== undefined) {
+            ctx.font = "bold 10px 'Segoe UI', sans-serif";
+            ctx.fillStyle = (spell as any).count > 0 ? "#f1c40f" : "rgba(241,196,15,0.3)";
+            ctx.textAlign = "center";
+            ctx.fillText(`×${(spell as any).count}`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
           }
 
           // Key number
@@ -1163,13 +1249,15 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
       // Update React state for HUD overlay (throttled)
       if (me && Math.floor(time / 500) !== Math.floor((time - 16) / 500)) {
-        setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId, isHardcore: me.isHardcore });
+        setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId, isHardcore: me.isHardcore, gold: me.gold });
         // Save character to localStorage
         try {
           localStorage.setItem("mmo_character", JSON.stringify({
             name: me.name, playerClass: me.playerClass,
             level: me.level, xp: me.xp, savedAt: Date.now(),
             isHardcore: me.isHardcore,
+            gold: me.gold,
+            inventory: me.inventory,
           }));
         } catch {}
       }
@@ -1240,6 +1328,75 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               ⛪ Respawn at Temple
             </button>
           )}
+        </div>
+      )}
+
+      {/* Shop overlay */}
+      {shopOpen && myStats && (
+        <div style={{
+          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 25,
+        }} onClick={() => setShopOpen(false)}>
+          <div style={{
+            background: "#1a1a2e", border: "2px solid #f1c40f", borderRadius: 12,
+            padding: 24, minWidth: 300, maxWidth: 400,
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ color: "#f1c40f", margin: 0, fontSize: 20 }}>🏪 Mira's Shop</h2>
+              <span style={{ color: "#f1c40f", fontSize: 14 }}>💰 {myStats ? (() => { const me = playersRef.current.get(sessionIdRef.current); return me?.gold || 0; })() : 0}</span>
+            </div>
+            {SHOP_ITEMS.map(itemId => {
+              const item = ITEMS[itemId];
+              if (!item) return null;
+              const me = playersRef.current.get(sessionIdRef.current);
+              const canAfford = (me?.gold || 0) >= item.buyPrice;
+              return (
+                <div key={itemId} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 12px", borderRadius: 8, marginBottom: 8,
+                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 24 }}>{item.icon}</span>
+                    <div>
+                      <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
+                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : `+${item.effect?.mp} MP`}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: "#f1c40f", fontSize: 14 }}>{item.buyPrice}g</span>
+                    <button
+                      onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 1 })}
+                      disabled={!canAfford}
+                      style={{
+                        padding: "4px 12px", borderRadius: 6, border: "none",
+                        background: canAfford ? "#27ae60" : "#555", color: "#fff",
+                        cursor: canAfford ? "pointer" : "default", fontSize: 12, fontWeight: "bold",
+                      }}
+                    >Buy 1</button>
+                    <button
+                      onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 10 })}
+                      disabled={(me?.gold || 0) < item.buyPrice * 10}
+                      style={{
+                        padding: "4px 12px", borderRadius: 6, border: "none",
+                        background: (me?.gold || 0) >= item.buyPrice * 10 ? "#2980b9" : "#555", color: "#fff",
+                        cursor: (me?.gold || 0) >= item.buyPrice * 10 ? "pointer" : "default", fontSize: 12, fontWeight: "bold",
+                      }}
+                    >Buy 10</button>
+                  </div>
+                </div>
+              );
+            })}
+            <button
+              onClick={() => setShopOpen(false)}
+              style={{
+                marginTop: 12, width: "100%", padding: "8px", borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.2)", background: "transparent",
+                color: "#aaa", cursor: "pointer", fontSize: 14,
+              }}
+            >Close (Esc)</button>
+          </div>
         </div>
       )}
 

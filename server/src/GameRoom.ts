@@ -3,7 +3,9 @@ import { Schema, MapSchema, type } from "@colyseus/schema";
 import { PlayerState } from "./PlayerState";
 import { SlimeState } from "./SlimeState";
 import { WolfState } from "./WolfState";
+import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
+import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE } from "./items";
 
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
@@ -38,6 +40,69 @@ const HEAL_COST = 20;       // mana cost
 const HEAL_AMOUNT = 30;     // hp restored
 const POWER_SHOT_COST = 30; // ranger extra shot
 const CLEAVE_COST = 30;     // warrior AoE attack
+const POTION_COOLDOWN_MS = 2000;
+const SLIME_GOLD_MIN = 5; const SLIME_GOLD_MAX = 15;
+const WOLF_GOLD_MIN = 20; const WOLF_GOLD_MAX = 40;
+const PVP_GOLD_MIN = 10; const PVP_GOLD_MAX = 30;
+
+function randRange(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+// Inventory helpers
+function addToInventory(player: PlayerState, itemId: string, qty: number): boolean {
+  for (let i = 0; i < player.inventory.length; i++) {
+    const slot = player.inventory.at(i);
+    if (!slot) continue;
+    if (slot.itemId === itemId) {
+      const item = ITEMS[itemId];
+      if (item && slot.quantity < item.maxStack) {
+        const canAdd = Math.min(qty, item.maxStack - slot.quantity);
+        slot.quantity += canAdd;
+        qty -= canAdd;
+        if (qty <= 0) return true;
+      }
+    }
+  }
+  while (qty > 0 && player.inventory.length < INVENTORY_SIZE) {
+    const item = ITEMS[itemId];
+    if (!item) return false;
+    const slot = new InventorySlot();
+    slot.itemId = itemId;
+    slot.quantity = Math.min(qty, item.maxStack);
+    qty -= slot.quantity;
+    player.inventory.push(slot);
+  }
+  return qty <= 0;
+}
+
+function removeFromInventory(player: PlayerState, itemId: string, qty: number): boolean {
+  let remaining = qty;
+  for (let i = player.inventory.length - 1; i >= 0; i--) {
+    const slot = player.inventory.at(i);
+    if (!slot) continue;
+    if (slot.itemId === itemId) {
+      if (slot.quantity <= remaining) {
+        remaining -= slot.quantity;
+        player.inventory.splice(i, 1);
+      } else {
+        slot.quantity -= remaining;
+        remaining = 0;
+      }
+      if (remaining <= 0) return true;
+    }
+  }
+  return false;
+}
+
+function countInInventory(player: PlayerState, itemId: string): number {
+  let count = 0;
+  for (let i = 0; i < player.inventory.length; i++) {
+    const s = player.inventory.at(i);
+    if (s && s.itemId === itemId) count += s.quantity;
+  }
+  return count;
+}
 
 // Class configs
 const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
@@ -274,6 +339,7 @@ export class GameRoom extends Room<GameState> {
 
         const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
         player.xp += xpGain;
+        player.gold += randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX);
 
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
@@ -330,6 +396,7 @@ export class GameRoom extends Room<GameState> {
 
         const xpGain = WOLF_XP;
         player.xp += xpGain;
+        player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
 
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
@@ -385,6 +452,7 @@ export class GameRoom extends Room<GameState> {
       if (target.hp <= 0) {
         const xpGain = 50 + target.level * 10;
         player.xp += xpGain;
+        player.gold += randRange(PVP_GOLD_MIN, PVP_GOLD_MAX);
         player.targetId = "";
 
         const newLevel = levelFromXp(player.xp);
@@ -805,6 +873,65 @@ export class GameRoom extends Room<GameState> {
       this.broadcast("heal_effect", { sessionId: client.sessionId, amount: healed });
     });
 
+    // ── Use Potion ──
+    const potionCooldowns = new Map<string, number>();
+    this.onMessage("use_potion", (client, data: { itemId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const itemId = data.itemId;
+      const item = ITEMS[itemId];
+      if (!item || item.type !== "consumable") return;
+      if (countInInventory(player, itemId) <= 0) return;
+
+      // Cooldown check
+      const now = Date.now();
+      const lastUse = potionCooldowns.get(client.sessionId) || 0;
+      if (now - lastUse < POTION_COOLDOWN_MS) return;
+      potionCooldowns.set(client.sessionId, now);
+
+      // Don't waste potions at full
+      if (item.effect?.hp && player.hp >= player.maxHp) return;
+      if (item.effect?.mp && player.mp >= player.maxMp) return;
+
+      removeFromInventory(player, itemId, 1);
+
+      if (item.effect?.hp) {
+        const healed = Math.min(item.effect.hp, player.maxHp - player.hp);
+        player.hp += healed;
+        this.broadcast("heal_effect", { sessionId: client.sessionId, amount: healed });
+      }
+      if (item.effect?.mp) {
+        const restored = Math.min(item.effect.mp, player.maxMp - player.mp);
+        player.mp += restored;
+        this.broadcast("mana_effect", { sessionId: client.sessionId, amount: restored });
+      }
+    });
+
+    // ── Shop Buy ──
+    this.onMessage("shop_buy", (client, data: { itemId: string; quantity: number }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const item = ITEMS[data.itemId];
+      if (!item || !SHOP_ITEMS.includes(data.itemId)) return;
+      const qty = Math.max(1, Math.min(data.quantity || 1, 50));
+      const cost = item.buyPrice * qty;
+      if (player.gold < cost) return;
+      if (!addToInventory(player, data.itemId, qty)) return; // inventory full
+      player.gold -= cost;
+    });
+
+    // ── Shop Sell ──
+    this.onMessage("shop_sell", (client, data: { itemId: string; quantity: number }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const item = ITEMS[data.itemId];
+      if (!item || item.sellPrice <= 0) return;
+      const qty = Math.max(1, Math.min(data.quantity || 1, countInInventory(player, data.itemId)));
+      if (qty <= 0) return;
+      if (!removeFromInventory(player, data.itemId, qty)) return;
+      player.gold += item.sellPrice * qty;
+    });
+
     // ── Power Shot (Ranger) — extra arrow that doesn't reset attack timer ──
     this.onMessage("power_shot", (client) => {
       const player = this.state.players.get(client.sessionId);
@@ -855,6 +982,7 @@ export class GameRoom extends Room<GameState> {
         if (wolf.hp <= 0) {
           wolf.alive = false; wolf.targetPlayerId = ""; player.targetId = "";
           player.xp += WOLF_XP;
+          player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
           const newLevel = levelFromXp(player.xp);
           if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
           this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
@@ -925,6 +1053,7 @@ export class GameRoom extends Room<GameState> {
           wolf.alive = false; wolf.targetPlayerId = "";
           if (player.targetId === wolfId) player.targetId = "";
           player.xp += WOLF_XP;
+          player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
           this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
@@ -954,7 +1083,7 @@ export class GameRoom extends Room<GameState> {
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
-  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean }) {
+  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean; savedGold?: number; savedInventory?: Array<{itemId: string; quantity: number}> }) {
     const player = new PlayerState();
     const cls = (options.playerClass === "ranger") ? "ranger" : "warrior";
     const cfg = CLASS_CONFIG[cls];
@@ -979,6 +1108,16 @@ export class GameRoom extends Room<GameState> {
     player.level = level;
     player.attack = cfg.attackBase + (level - 1) * 5;
     player.targetId = "";
+    player.gold = Math.max(0, Math.min(options.savedGold || 0, 10000000));
+
+    // Restore inventory
+    if (options.savedInventory && Array.isArray(options.savedInventory)) {
+      for (const slot of options.savedInventory) {
+        if (slot.itemId && ITEMS[slot.itemId] && slot.quantity > 0) {
+          addToInventory(player, slot.itemId, Math.min(slot.quantity, ITEMS[slot.itemId].maxStack));
+        }
+      }
+    }
 
     this.state.players.set(client.sessionId, player);
     lastMoveTime.set(client.sessionId, 0);
