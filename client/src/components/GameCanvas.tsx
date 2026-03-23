@@ -1252,6 +1252,49 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | Enter: Chat | Esc: Untarget", w - 10, 20);
       }
 
+      /* ── Day/Night cycle overlay ─────────────────────── */
+      {
+        // Full day cycle = 10 real minutes (600s)
+        const DAY_CYCLE_MS = 600000;
+        const cyclePos = (Date.now() % DAY_CYCLE_MS) / DAY_CYCLE_MS; // 0-1
+        // 0.0-0.25 = dawn, 0.25-0.5 = day, 0.5-0.75 = dusk, 0.75-1.0 = night
+        let nightAlpha = 0;
+        let tintR = 0, tintG = 0, tintB = 0;
+        if (cyclePos < 0.2) {
+          // Dawn: dark → light, warm orange tint
+          const t = cyclePos / 0.2;
+          nightAlpha = 0.35 * (1 - t);
+          tintR = 255; tintG = 140; tintB = 50;
+        } else if (cyclePos < 0.5) {
+          // Day: clear, no overlay
+          nightAlpha = 0;
+        } else if (cyclePos < 0.65) {
+          // Dusk: light → getting dark, warm red/purple tint
+          const t = (cyclePos - 0.5) / 0.15;
+          nightAlpha = 0.3 * t;
+          tintR = Math.floor(200 + 55 * (1 - t)); tintG = Math.floor(80 * (1 - t)); tintB = Math.floor(120 * t);
+        } else {
+          // Night: dark blue overlay
+          const t = Math.min((cyclePos - 0.65) / 0.1, 1);
+          nightAlpha = 0.3 + 0.15 * t;
+          tintR = 20; tintG = 20; tintB = 80;
+        }
+        if (nightAlpha > 0.01) {
+          ctx.save();
+          ctx.globalAlpha = nightAlpha;
+          ctx.fillStyle = `rgb(${tintR},${tintG},${tintB})`;
+          ctx.fillRect(0, 0, w, h);
+          ctx.restore();
+        }
+
+        // Time indicator (small clock icon in minimap area)
+        const timeNames = cyclePos < 0.2 ? "🌅 Dawn" : cyclePos < 0.5 ? "☀️ Day" : cyclePos < 0.65 ? "🌇 Dusk" : "🌙 Night";
+        ctx.font = "10px 'Segoe UI', sans-serif";
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.textAlign = "right";
+        ctx.fillText(timeNames, w - 12, isMobile ? 46 : 24);
+      }
+
       /* ── Minimap (top-right corner) ──────────────────── */
       if (me && worldMapRef.current) {
         const mmW = isMobile ? 100 : 140;

@@ -16,3 +16,7 @@ Alex — read this in the morning to see what got built overnight.
 - Use buttons for consumables (potions)
 - Removed duplicate "Mira's Shop" overlay — only Pip's Shop remains
 - Purple-themed UI with hover effects
+
+### 2. 🗺️ Minimap
+- Minimap with terrain colors, monster dots, player dots, and viewport indicator
+- Shows the full map in miniature in the corner
