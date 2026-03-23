@@ -13,6 +13,7 @@ interface PlayerData {
   color: string; name: string;
   direction: string; moving: boolean;
   hp: number; maxHp: number;
+  mp: number; maxMp: number;
   xp: number; level: number;
   playerClass: string;
   targetId: string;
@@ -356,6 +357,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           direction: player.direction || "down",
           moving: player.moving || false,
           hp: player.hp || 100, maxHp: player.maxHp || 100,
+          mp: player.mp || 0, maxMp: player.maxMp || 50,
           xp: player.xp || 0, level: player.level || 1,
           playerClass: player.playerClass || "warrior",
           targetId: player.targetId || "",
@@ -376,6 +378,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           p.direction = player.direction || "down";
           p.moving = player.moving || false;
           p.hp = player.hp; p.maxHp = player.maxHp;
+          p.mp = player.mp; p.maxMp = player.maxMp;
           p.xp = player.xp; p.level = player.level;
           p.playerClass = player.playerClass || "warrior";
           p.targetId = player.targetId || "";
@@ -1022,9 +1025,9 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           // Mana bar (same width as HP bar)
           ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(34, barY + 8, 122, 7);
           ctx.fillStyle = "#1a1a2e"; ctx.fillRect(35, barY + 9, 120, 5);
-          ctx.fillStyle = "#3498db"; ctx.fillRect(35, barY + 9, 120 * ((me as any).mp / ((me as any).maxMp || 1)), 5);
+          ctx.fillStyle = "#3498db"; ctx.fillRect(35, barY + 9, 120 * (me.mp / (me.maxMp || 1)), 5);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`${(me as any).mp}/${(me as any).maxMp}`, 165, barY + 16);
+          ctx.fillText(`${me.mp}/${me.maxMp}`, 165, barY + 16);
 
           // XP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
