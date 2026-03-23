@@ -664,7 +664,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [chatOpen, chatText, talkToNearbyNPC]);
+  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen]);
 
   const handleDpad = (dx: number, dy: number, pressed: boolean) => {
     if (pressed) dpadRef.current = { dx, dy };
@@ -1172,7 +1172,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.fillText(`💰 ${me.gold}`, 10, barY + 46);
         }
 
-        // ── Spell bar (centered bottom) ────────────────
+        // ── Spell bar (centered bottom, desktop only) ────────────────
+        if (!isMobile) {
         const SLOT_SIZE = 52;
         const SLOT_GAP = 6;
         const SLOT_COUNT = 4;
@@ -1241,6 +1242,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.fillText(spell.key, sx + 4, barBY + 12);
         }
       }
+      } // end desktop spell bar
 
       if (!isMobile) {
         ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.font = "12px monospace"; ctx.textAlign = "right";
@@ -1407,36 +1409,77 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         </div>
       )}
 
-      {/* Mobile stats overlay */}
+      {/* Mobile HUD */}
       {isMobile && myStats && (
-        <div style={{ position: "absolute", top: 10, left: 10, background: "rgba(0,0,0,0.6)", borderRadius: 8, padding: "6px 10px", zIndex: 10, color: "#fff", fontSize: 11 }}>
-          <div>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level} | HP: {myStats.hp}/{myStats.maxHp} | XP: {myStats.xp - xpForLevel(myStats.level)}/{xpForLevel(myStats.level + 1) - xpForLevel(myStats.level)}</div>
+        <div style={{ position: "absolute", top: 8, left: 8, right: 8, background: "rgba(0,0,0,0.7)", borderRadius: 8, padding: "6px 10px", zIndex: 10, color: "#fff", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level} | HP: {myStats.hp}/{myStats.maxHp}</div>
+          <div style={{ color: "#f1c40f" }}>💰 {myStats.gold}</div>
         </div>
       )}
 
       {isMobile && (
         <>
-          <div style={{ position: "absolute", bottom: 30, left: 30, display: "grid", gridTemplateColumns: "60px 60px 60px", gridTemplateRows: "60px 60px 60px", gap: 6, zIndex: 10 }}>
+          {/* D-pad */}
+          <div style={{ position: "absolute", bottom: 20, left: 16, display: "grid", gridTemplateColumns: "52px 52px 52px", gridTemplateRows: "52px 52px 52px", gap: 4, zIndex: 10 }}>
             <div /><div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(0, -1, true); }} onTouchEnd={() => handleDpad(0, -1, false)} onTouchCancel={() => handleDpad(0, -1, false)}>▲</div><div />
             <div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(-1, 0, true); }} onTouchEnd={() => handleDpad(-1, 0, false)} onTouchCancel={() => handleDpad(-1, 0, false)}>◀</div>
-            <div style={{ width: 60, height: 60 }} />
+            <div style={{ width: 52, height: 52 }} />
             <div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(1, 0, true); }} onTouchEnd={() => handleDpad(1, 0, false)} onTouchCancel={() => handleDpad(1, 0, false)}>▶</div>
             <div /><div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(0, 1, true); }} onTouchEnd={() => handleDpad(0, 1, false)} onTouchCancel={() => handleDpad(0, 1, false)}>▼</div><div />
           </div>
 
-          <div style={{ position: "absolute", bottom: 30, right: 30, display: "flex", flexDirection: "column", gap: 10, zIndex: 10 }}>
-            <div style={{ ...btnStyle, background: myStats?.targetId ? "rgba(231,76,60,0.6)" : "rgba(0,0,0,0.4)", fontSize: 14, width: 60, height: 60 }}
-              onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
-            <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 14, width: 56, height: 56 }}
+          {/* Action buttons (2 columns) */}
+          <div style={{ position: "absolute", bottom: 20, right: 12, display: "grid", gridTemplateColumns: "50px 50px", gap: 6, zIndex: 10 }}>
+            <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 12, width: 50, height: 50 }}
               onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
-            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 14, width: 56, height: 56 }}
-              onTouchStart={(e) => { e.preventDefault(); const me = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(me?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
-            <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}
+            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 12, width: 50, height: 50 }}
+              onTouchStart={(e) => { e.preventDefault(); const m = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(m?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
+            <div style={{ ...btnStyle, background: "rgba(231,76,60,0.4)", fontSize: 12, width: 50, height: 50 }}
+              onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "health_potion" }); lastPotionUse.current = now; } }}>❤️</div>
+            <div style={{ ...btnStyle, background: "rgba(52,152,219,0.4)", fontSize: 12, width: 50, height: 50 }}
+              onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "mana_potion" }); lastPotionUse.current = now; } }}>💙</div>
+            <div style={{ ...btnStyle, background: myStats?.targetId ? "rgba(231,76,60,0.6)" : "rgba(0,0,0,0.3)", fontSize: 12, width: 50, height: 50 }}
+              onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
+            <div style={{ ...btnStyle, fontSize: 12, width: 50, height: 50 }}
               onTouchStart={(e) => { e.preventDefault(); talkToNearbyNPC(); }}>💬</div>
-            <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}
+            <div style={{ ...btnStyle, fontSize: 12, width: 50, height: 50 }}
               onTouchStart={(e) => { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); }}>✏️</div>
           </div>
         </>
+      )}
+
+      {/* Shop overlay */}
+      {shopOpen && myStats && (
+        <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25 }} onClick={() => setShopOpen(false)}>
+          <div style={{ background: "#1a1a2e", border: "2px solid #f1c40f", borderRadius: 12, padding: 24, minWidth: 280, maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ color: "#f1c40f", margin: 0, fontSize: 20 }}>🏪 Pip&apos;s Shop</h2>
+              <span style={{ color: "#f1c40f", fontSize: 14 }}>💰 {myStats.gold}</span>
+            </div>
+            {SHOP_ITEMS.map(itemId => {
+              const item = ITEMS[itemId];
+              if (!item) return null;
+              const canAfford = myStats.gold >= item.buyPrice;
+              return (
+                <div key={itemId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 8, marginBottom: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 24 }}>{item.icon}</span>
+                    <div>
+                      <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
+                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : `+${item.effect?.mp} MP`}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ color: "#f1c40f", fontSize: 13 }}>{item.buyPrice}g</span>
+                    <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 1 })} disabled={!canAfford} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: canAfford ? "#27ae60" : "#555", color: "#fff", cursor: canAfford ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×1</button>
+                    <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 10 })} disabled={myStats.gold < item.buyPrice * 10} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: myStats.gold >= item.buyPrice * 10 ? "#2980b9" : "#555", color: "#fff", cursor: myStats.gold >= item.buyPrice * 10 ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×10</button>
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={() => setShopOpen(false)} style={{ marginTop: 12, width: "100%", padding: "8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#aaa", cursor: "pointer", fontSize: 14 }}>Close</button>
+          </div>
+        </div>
       )}
     </div>
   );
