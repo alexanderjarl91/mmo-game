@@ -630,12 +630,21 @@ export class GameRoom extends Room<GameState> {
       });
     }, 200); // check every 200ms
 
-    // Mana regen tick
+    // Mana regen tick (+ temple fast regen)
     this.clock.setInterval(() => {
       this.state.players.forEach((player) => {
         if (player.hp <= 0) return;
+        // Check if player is on a temple tile
+        const tileX = Math.round(player.x / TILE_SIZE);
+        const tileY = Math.round(player.y / TILE_SIZE);
+        const onTemple = WORLD_MAP[tileY]?.[tileX] === TILE.TEMPLE;
+        const regenMult = onTemple ? 10 : 1; // 10x regen in temple
+
         if (player.mp < player.maxMp) {
-          player.mp = Math.min(player.maxMp, player.mp + MANA_REGEN_AMT);
+          player.mp = Math.min(player.maxMp, player.mp + MANA_REGEN_AMT * regenMult);
+        }
+        if (onTemple && player.hp < player.maxHp) {
+          player.hp = Math.min(player.maxHp, player.hp + 5 * regenMult); // 50 HP/tick in temple
         }
       });
     }, MANA_REGEN_MS);

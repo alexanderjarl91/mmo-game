@@ -9,6 +9,7 @@ export const TILE = {
   BRIDGE: 6,
   WALL: 7,
   FLOOR: 8,
+  TEMPLE: 9,
 } as const;
 
 export const BLOCKED = new Set<number>([TILE.TREE, TILE.ROCK, TILE.WATER, TILE.WALL]);
@@ -172,6 +173,15 @@ function generateMap(): number[][] {
   for (let x = h3x + 2; x <= vmx; x++) set(x, h3y, TILE.PATH);
   for (let x = vmx; x <= h4x + 1; x++) set(x, h4y, TILE.PATH);
 
+  // ── Temple (south of village center) ──
+  const tx = vmx - 2, ty = vmy + 6;
+  // 5x4 building with walls and temple floor
+  fill(tx, ty, tx + 4, ty + 3, TILE.WALL);
+  fill(tx + 1, ty + 1, tx + 3, ty + 2, TILE.TEMPLE);
+  set(tx + 2, ty, TILE.PATH); // entrance (north side, facing village)
+  // Path connecting temple to village center road
+  for (let y = vmy; y <= ty; y++) set(vmx, y, TILE.PATH);
+
   // ── Pond (NE outside village) ──
   const px = vmx + 12, py = vmy - 10;
   fill(px, py, px + 5, py + 4, TILE.WATER);
@@ -302,6 +312,19 @@ export const NPCS: NPCDef[] = [
       "Shh... you'll scare the fish.",
       "I've been fishing this pond for 40 years.",
       "Never caught anything. But tomorrow could be the day!",
+    ],
+  },
+  {
+    id: "priestess",
+    x: 36, y: 44,
+    name: "Priestess Luna",
+    color: "#e1bee7",
+    direction: "up",
+    dialogue: [
+      "Welcome to the Temple of Light, weary traveler.",
+      "Rest here and your wounds shall heal swiftly.",
+      "The temple's blessing restores body and spirit alike.",
+      "May the light guide your path through the wilderness.",
     ],
   },
 ];

@@ -62,7 +62,7 @@ const DAMAGE_DURATION = 1200;
 
 const SPRITE_W = 64, SPRITE_H = 64, WALK_FRAMES = 9, ANIM_SPEED = 80;
 const DIR_ROW: Record<string, number> = { up: 8, left: 9, down: 10, right: 11 };
-const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8 };
+const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8, TEMPLE: 9 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 const HEAL_COST = 20;
 
@@ -219,6 +219,15 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           case TILE.FLOOR:
             ctx.fillStyle = "#A1887F"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             ctx.strokeStyle = "#8D6E63"; ctx.lineWidth = 1; ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+            break;
+          case TILE.TEMPLE:
+            // Golden/holy floor
+            ctx.fillStyle = "#F5E6CA"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = "#D4AF37"; ctx.lineWidth = 1; ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+            // Cross/star pattern
+            ctx.strokeStyle = "rgba(212,175,55,0.4)"; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(px + TILE_SIZE / 2, py + 8); ctx.lineTo(px + TILE_SIZE / 2, py + TILE_SIZE - 8); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(px + 8, py + TILE_SIZE / 2); ctx.lineTo(px + TILE_SIZE - 8, py + TILE_SIZE / 2); ctx.stroke();
             break;
         }
       }
