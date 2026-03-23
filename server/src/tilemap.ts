@@ -174,13 +174,16 @@ function generateMap(): number[][] {
   for (let x = vmx; x <= h4x + 1; x++) set(x, h4y, TILE.PATH);
 
   // ── Temple (south of village center) ──
-  const tx = vmx - 2, ty = vmy + 6;
-  // 5x4 building with walls and temple floor
-  fill(tx, ty, tx + 4, ty + 3, TILE.WALL);
-  fill(tx + 1, ty + 1, tx + 3, ty + 2, TILE.TEMPLE);
-  set(tx + 2, ty, TILE.PATH); // entrance (north side, facing village)
+  const tx = vmx - 3, ty = vmy + 6;
+  // 7x6 building with walls and temple floor
+  fill(tx, ty, tx + 6, ty + 5, TILE.WALL);
+  fill(tx + 1, ty + 1, tx + 5, ty + 4, TILE.TEMPLE); // 5×4 interior
+  // 2-tile wide entrance (north side, facing village)
+  set(tx + 3, ty, TILE.PATH);
+  set(tx + 4, ty, TILE.PATH);
   // Path connecting temple to village center road
   for (let y = vmy; y <= ty; y++) set(vmx, y, TILE.PATH);
+  set(vmx + 1, ty, TILE.PATH); // widen path at entrance
 
   // ── Pond (NE outside village) ──
   const px = vmx + 12, py = vmy - 10;
@@ -316,7 +319,7 @@ export const NPCS: NPCDef[] = [
   },
   {
     id: "priestess",
-    x: 36, y: 44,
+    x: 36, y: 46,
     name: "Priestess Luna",
     color: "#e1bee7",
     direction: "up",
