@@ -22,7 +22,7 @@ const HEAL_AMOUNT = 30;     // hp restored
 // Class configs
 const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
   warrior: { range: 1, attackBase: 30, hpBase: 120, attackInterval: 1000, mpBase: 40 },
-  ranger:  { range: 3, attackBase: 20, hpBase: 80,  attackInterval: 1500, mpBase: 60 },
+  ranger:  { range: 4, attackBase: 20, hpBase: 80,  attackInterval: 1500, mpBase: 60 },
 };
 
 const COLORS = [
@@ -96,6 +96,48 @@ function canWalk(tx: number, ty: number): boolean {
   const tile = WORLD_MAP[ty]?.[tx];
   if (tile === undefined) return false;
   return !BLOCKED.has(tile) && tile !== TILE.WATER;
+}
+
+// BFS pathfinder — returns next tile to step to, or null if no path
+function bfsNextStep(sx: number, sy: number, gx: number, gy: number, maxDist: number): { x: number; y: number } | null {
+  if (sx === gx && sy === gy) return null;
+  const dirs = [
+    { dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
+    { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 }, // diagonals
+  ];
+  const visited = new Set<string>();
+  visited.add(`${sx},${sy}`);
+  // Queue entries: [tx, ty, firstStepX, firstStepY]
+  const queue: [number, number, number, number][] = [];
+  for (const d of dirs) {
+    const nx = sx + d.dx, ny = sy + d.dy;
+    const key = `${nx},${ny}`;
+    if (visited.has(key)) continue;
+    // Target tile is always walkable (player is standing on it)
+    const walkable = (nx === gx && ny === gy) ? true : canWalk(nx, ny);
+    if (!walkable) continue;
+    if (nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44) continue; // village zone
+    visited.add(key);
+    if (nx === gx && ny === gy) return { x: nx, y: ny };
+    queue.push([nx, ny, nx, ny]);
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const [cx, cy, fx, fy] = queue[head++];
+    if (Math.abs(cx - sx) > maxDist || Math.abs(cy - sy) > maxDist) continue;
+    for (const d of dirs) {
+      const nx = cx + d.dx, ny = cy + d.dy;
+      const key = `${nx},${ny}`;
+      if (visited.has(key)) continue;
+      const walkable = (nx === gx && ny === gy) ? true : canWalk(nx, ny);
+      if (!walkable) continue;
+      if (nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44) continue;
+      visited.add(key);
+      if (nx === gx && ny === gy) return { x: fx, y: fy };
+      queue.push([nx, ny, fx, fy]);
+    }
+  }
+  return null; // no path found
 }
 
 function dist(x1: number, y1: number, x2: number, y2: number): number {
@@ -434,29 +476,13 @@ export class GameRoom extends Room<GameState> {
           return;
         }
 
-        // Chase — move toward player
+        // Chase — BFS pathfind toward player (avoids getting stuck on obstacles)
         const ptx = Math.round(closest.x / TILE_SIZE);
         const pty = Math.round(closest.y / TILE_SIZE);
-        const dx = ptx - wtx;
-        const dy = pty - wty;
-        // Prefer the axis with larger distance
-        const moves: { dx: number; dy: number }[] = [];
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          if (dx !== 0) moves.push({ dx: Math.sign(dx), dy: 0 });
-          if (dy !== 0) moves.push({ dx: 0, dy: Math.sign(dy) });
-        } else {
-          if (dy !== 0) moves.push({ dx: 0, dy: Math.sign(dy) });
-          if (dx !== 0) moves.push({ dx: Math.sign(dx), dy: 0 });
-        }
-        for (const m of moves) {
-          const nx = wolf.x + m.dx * TILE_SIZE;
-          const ny = wolf.y + m.dy * TILE_SIZE;
-          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
-          if (!canWalk(ntx, nty)) continue;
-          if (ntx >= 28 && ntx <= 44 && nty >= 28 && nty <= 44) continue;
-          wolf.x = nx;
-          wolf.y = ny;
-          break;
+        const step = bfsNextStep(wtx, wty, ptx, pty, WOLF_LEASH_RANGE);
+        if (step) {
+          wolf.x = step.x * TILE_SIZE;
+          wolf.y = step.y * TILE_SIZE;
         }
       });
     }, WOLF_MOVE_INTERVAL_MS);
