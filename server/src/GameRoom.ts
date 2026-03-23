@@ -751,10 +751,14 @@ export class GameRoom extends Room<GameState> {
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
-  onJoin(client: Client, options: { name?: string; playerClass?: string }) {
+  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number }) {
     const player = new PlayerState();
     const cls = (options.playerClass === "ranger") ? "ranger" : "warrior";
     const cfg = CLASS_CONFIG[cls];
+
+    // Restore saved progress
+    const xp = Math.max(0, Math.min(options.savedXp || 0, 10000)); // cap at level 100
+    const level = Math.floor(xp / XP_PER_LEVEL) + 1;
 
     player.x = SPAWN_TILE_X * TILE_SIZE;
     player.y = SPAWN_TILE_Y * TILE_SIZE;
@@ -763,13 +767,13 @@ export class GameRoom extends Room<GameState> {
     player.direction = "down";
     player.moving = false;
     player.playerClass = cls;
-    player.hp = cfg.hpBase;
-    player.maxHp = cfg.hpBase;
-    player.mp = cfg.mpBase;
-    player.maxMp = cfg.mpBase;
-    player.xp = 0;
-    player.level = 1;
-    player.attack = cfg.attackBase;
+    player.hp = cfg.hpBase + (level - 1) * 20;
+    player.maxHp = cfg.hpBase + (level - 1) * 20;
+    player.mp = cfg.mpBase + (level - 1) * 10;
+    player.maxMp = cfg.mpBase + (level - 1) * 10;
+    player.xp = xp;
+    player.level = level;
+    player.attack = cfg.attackBase + (level - 1) * 5;
     player.targetId = "";
 
     this.state.players.set(client.sessionId, player);

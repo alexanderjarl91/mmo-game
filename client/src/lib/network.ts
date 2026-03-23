@@ -14,8 +14,19 @@ export function getClient(): Client {
 
 export async function joinGame(name: string, playerClass: string): Promise<Room> {
   const c = getClient();
+  // Load saved character data
+  let savedXp = 0;
   try {
-    room = await c.joinOrCreate("game", { name, playerClass });
+    const raw = localStorage.getItem("mmo_character");
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (saved.name === name && saved.playerClass === playerClass) {
+        savedXp = saved.xp || 0;
+      }
+    }
+  } catch {}
+  try {
+    room = await c.joinOrCreate("game", { name, playerClass, savedXp });
     return room;
   } catch (err: any) {
     console.error("Join failed:", err);

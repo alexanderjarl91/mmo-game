@@ -1038,9 +1038,68 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
           ctx.fillText(`Lv.${me.level} (${xpInLevel}/100)`, 165, barY + 32);
 
-          // Spell bar
-          ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
-          ctx.fillText(`[1] 💚 Heal (${HEAL_COST} MP)`, 10, barY + 48);
+        }
+
+        // ── Spell bar (centered bottom) ────────────────
+        const SLOT_SIZE = 52;
+        const SLOT_GAP = 6;
+        const SLOT_COUNT = 4;
+        const barW = SLOT_COUNT * SLOT_SIZE + (SLOT_COUNT - 1) * SLOT_GAP;
+        const barX = Math.floor(w / 2 - barW / 2);
+        const barBY = h - SLOT_SIZE - 12;
+
+        const spells = [
+          { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp },
+          { key: "2", icon: "", name: "", cost: 0, active: false, canUse: false },
+          { key: "3", icon: "", name: "", cost: 0, active: false, canUse: false },
+          { key: "4", icon: "", name: "", cost: 0, active: false, canUse: false },
+        ];
+
+        for (let i = 0; i < spells.length; i++) {
+          const spell = spells[i];
+          const sx = barX + i * (SLOT_SIZE + SLOT_GAP);
+
+          // Slot background
+          ctx.fillStyle = spell.active ? "rgba(0,0,0,0.7)" : "rgba(0,0,0,0.4)";
+          ctx.beginPath();
+          ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
+          ctx.fill();
+
+          // Border
+          ctx.strokeStyle = spell.canUse ? "rgba(46,204,113,0.8)" : spell.active ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
+          ctx.stroke();
+
+          // Icon
+          if (spell.icon) {
+            ctx.font = "22px serif";
+            ctx.textAlign = "center";
+            ctx.globalAlpha = spell.canUse ? 1 : 0.4;
+            ctx.fillText(spell.icon, sx + SLOT_SIZE / 2, barBY + 28);
+            ctx.globalAlpha = 1;
+          } else {
+            // Empty slot
+            ctx.font = "18px serif";
+            ctx.textAlign = "center";
+            ctx.fillStyle = "rgba(255,255,255,0.1)";
+            ctx.fillText("—", sx + SLOT_SIZE / 2, barBY + 28);
+          }
+
+          // Mana cost
+          if (spell.active && spell.cost > 0) {
+            ctx.font = "9px 'Segoe UI', sans-serif";
+            ctx.fillStyle = spell.canUse ? "#7ec8e3" : "rgba(126,200,227,0.4)";
+            ctx.textAlign = "center";
+            ctx.fillText(`${spell.cost} MP`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
+          }
+
+          // Key number
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "rgba(255,255,255,0.5)";
+          ctx.textAlign = "left";
+          ctx.fillText(spell.key, sx + 4, barBY + 12);
         }
       }
 
@@ -1052,6 +1111,13 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       // Update React state for HUD overlay (throttled)
       if (me && Math.floor(time / 500) !== Math.floor((time - 16) / 500)) {
         setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId });
+        // Save character to localStorage
+        try {
+          localStorage.setItem("mmo_character", JSON.stringify({
+            name: me.name, playerClass: me.playerClass,
+            level: me.level, xp: me.xp, savedAt: Date.now(),
+          }));
+        } catch {}
       }
 
       animId = requestAnimationFrame(loop);
