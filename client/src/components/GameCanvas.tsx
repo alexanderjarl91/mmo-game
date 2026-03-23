@@ -98,6 +98,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const lastPotionUse = useRef(0);
   const [chatText, setChatText] = useState("");
   const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string; isHardcore: boolean; gold: number } | null>(null);
@@ -628,10 +629,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           setChatOpen(false); canvasRef.current?.focus(); return;
         } else { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); return; }
       }
+      if (e.key === "Escape" && inventoryOpen) { setInventoryOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && shopOpen) { setShopOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && chatOpen) { setChatOpen(false); setChatText(""); canvasRef.current?.focus(); return; }
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
+      if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
       if (e.key === "2") {
@@ -664,7 +667,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen]);
+  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen]);
 
   const handleDpad = (dx: number, dy: number, pressed: boolean) => {
     if (pressed) dpadRef.current = { dx, dy };
@@ -1333,74 +1336,6 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         </div>
       )}
 
-      {/* Shop overlay */}
-      {shopOpen && myStats && (
-        <div style={{
-          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-          background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
-          zIndex: 25,
-        }} onClick={() => setShopOpen(false)}>
-          <div style={{
-            background: "#1a1a2e", border: "2px solid #f1c40f", borderRadius: 12,
-            padding: 24, minWidth: 300, maxWidth: 400,
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ color: "#f1c40f", margin: 0, fontSize: 20 }}>🏪 Mira's Shop</h2>
-              <span style={{ color: "#f1c40f", fontSize: 14 }}>💰 {myStats ? (() => { const me = playersRef.current.get(sessionIdRef.current); return me?.gold || 0; })() : 0}</span>
-            </div>
-            {SHOP_ITEMS.map(itemId => {
-              const item = ITEMS[itemId];
-              if (!item) return null;
-              const me = playersRef.current.get(sessionIdRef.current);
-              const canAfford = (me?.gold || 0) >= item.buyPrice;
-              return (
-                <div key={itemId} style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "10px 12px", borderRadius: 8, marginBottom: 8,
-                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 24 }}>{item.icon}</span>
-                    <div>
-                      <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
-                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : `+${item.effect?.mp} MP`}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: "#f1c40f", fontSize: 14 }}>{item.buyPrice}g</span>
-                    <button
-                      onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 1 })}
-                      disabled={!canAfford}
-                      style={{
-                        padding: "4px 12px", borderRadius: 6, border: "none",
-                        background: canAfford ? "#27ae60" : "#555", color: "#fff",
-                        cursor: canAfford ? "pointer" : "default", fontSize: 12, fontWeight: "bold",
-                      }}
-                    >Buy 1</button>
-                    <button
-                      onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 10 })}
-                      disabled={(me?.gold || 0) < item.buyPrice * 10}
-                      style={{
-                        padding: "4px 12px", borderRadius: 6, border: "none",
-                        background: (me?.gold || 0) >= item.buyPrice * 10 ? "#2980b9" : "#555", color: "#fff",
-                        cursor: (me?.gold || 0) >= item.buyPrice * 10 ? "pointer" : "default", fontSize: 12, fontWeight: "bold",
-                      }}
-                    >Buy 10</button>
-                  </div>
-                </div>
-              );
-            })}
-            <button
-              onClick={() => setShopOpen(false)}
-              style={{
-                marginTop: 12, width: "100%", padding: "8px", borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.2)", background: "transparent",
-                color: "#aaa", cursor: "pointer", fontSize: 14,
-              }}
-            >Close (Esc)</button>
-          </div>
-        </div>
-      )}
 
       {chatOpen && (
         <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 20 }}>
@@ -1418,7 +1353,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <span style={{ color: "#f1c40f", fontWeight: "bold", fontSize: 13 }}>💰 {myStats.gold}</span>
-            <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); alert("Inventory coming soon!"); }}>🎒</div>
+            <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setInventoryOpen(prev => !prev); }}>🎒</div>
           </div>
         </div>
       )}
@@ -1450,6 +1385,99 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           </div>
         </>
       )}
+
+      {/* Inventory overlay */}
+      {inventoryOpen && (() => {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (!me) return null;
+        const GRID_COLS = 5;
+        const GRID_ROWS = 4;
+        const SLOT_PX = 56;
+        const slots: Array<{ itemId: string; quantity: number } | null> = [];
+        for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) {
+          slots.push(me.inventory[i] && me.inventory[i].quantity > 0 ? me.inventory[i] : null);
+        }
+        return (
+          <div style={{
+            position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+            background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 30,
+          }} onClick={() => setInventoryOpen(false)}>
+            <div style={{
+              background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+              border: "2px solid #8b5cf6", borderRadius: 12, padding: 20,
+              minWidth: GRID_COLS * (SLOT_PX + 4) + 40,
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <h2 style={{ color: "#c4b5fd", margin: 0, fontSize: 18 }}>🎒 Inventory</h2>
+                <span style={{ color: "#f1c40f", fontSize: 13 }}>💰 {me.gold}g</span>
+              </div>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: `repeat(${GRID_COLS}, ${SLOT_PX}px)`,
+                gap: 4,
+              }}>
+                {slots.map((slot, i) => {
+                  const item = slot ? ITEMS[slot.itemId] : null;
+                  return (
+                    <div key={i} style={{
+                      width: SLOT_PX, height: SLOT_PX, borderRadius: 6,
+                      background: slot ? "rgba(139,92,246,0.15)" : "rgba(255,255,255,0.04)",
+                      border: slot ? "1px solid rgba(139,92,246,0.4)" : "1px solid rgba(255,255,255,0.08)",
+                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                      position: "relative", cursor: slot ? "pointer" : "default",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseOver={(e) => { if (slot) e.currentTarget.style.background = "rgba(139,92,246,0.3)"; }}
+                    onMouseOut={(e) => { if (slot) e.currentTarget.style.background = "rgba(139,92,246,0.15)"; }}
+                    >
+                      {item && (
+                        <>
+                          <span style={{ fontSize: 22 }}>{item.icon}</span>
+                          <span style={{ fontSize: 9, color: "#ccc", marginTop: 2 }}>{item.name.split(" ")[0]}</span>
+                          {slot!.quantity > 1 && (
+                            <span style={{
+                              position: "absolute", bottom: 2, right: 4,
+                              fontSize: 10, fontWeight: "bold", color: "#f1c40f",
+                              textShadow: "0 0 3px rgba(0,0,0,0.8)",
+                            }}>×{slot!.quantity}</span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Use buttons for consumables */}
+              <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {me.inventory.filter(s => s.quantity > 0 && ITEMS[s.itemId]?.effect).map((slot, i) => {
+                  const item = ITEMS[slot.itemId];
+                  if (!item) return null;
+                  return (
+                    <button key={i} onClick={() => {
+                      roomRef.current?.send("use_potion", { itemId: slot.itemId });
+                    }} style={{
+                      padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(139,92,246,0.5)",
+                      background: "rgba(139,92,246,0.2)", color: "#e2e8f0",
+                      cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", gap: 4,
+                    }}>
+                      <span>{item.icon}</span> Use {item.name} <span style={{ color: "#a78bfa" }}>×{slot.quantity}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "#64748b", fontSize: 11 }}>{me.inventory.filter(s => s.quantity > 0).length}/{GRID_COLS * GRID_ROWS} slots</span>
+                <button onClick={() => setInventoryOpen(false)} style={{
+                  padding: "5px 14px", borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+                  color: "#94a3b8", cursor: "pointer", fontSize: 12,
+                }}>Close (I)</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Shop overlay */}
       {shopOpen && myStats && (
