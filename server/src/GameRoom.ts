@@ -30,6 +30,8 @@ const MANA_REGEN_MS = 2000; // regen 1 mp every 2s
 const MANA_REGEN_AMT = 2;   // mp per tick
 const HEAL_COST = 20;       // mana cost
 const HEAL_AMOUNT = 30;     // hp restored
+const POWER_SHOT_COST = 30; // ranger extra shot
+const CLEAVE_COST = 30;     // warrior AoE attack
 
 // Class configs
 const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
@@ -341,15 +343,11 @@ export class GameRoom extends Room<GameState> {
         // Find spawn index
         const wIdx = parseInt(wolfId.split("_")[1]) || 0;
         this.clock.setTimeout(() => {
-          const spawns = (this as any)._wolfSpawns;
-          const spawn = spawns?.[wIdx];
-          if (spawn) {
-            wolf.x = spawn.x * TILE_SIZE;
-            wolf.y = spawn.y * TILE_SIZE;
+            wolf.x = wolf.spawnX;
+            wolf.y = wolf.spawnY;
             wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP;
             wolf.alive = true;
             wolf.targetPlayerId = "";
-          }
         }, WOLF_RESPAWN_MS);
       }
       return;
@@ -445,6 +443,8 @@ export class GameRoom extends Room<GameState> {
       wolf.id = `wolf_${i}`;
       wolf.x = spawn.x * TILE_SIZE;
       wolf.y = spawn.y * TILE_SIZE;
+      wolf.spawnX = wolf.x;
+      wolf.spawnY = wolf.y;
       wolf.hp = WOLF_HP;
       wolf.maxHp = WOLF_HP;
       wolf.alive = true;
@@ -774,6 +774,150 @@ export class GameRoom extends Room<GameState> {
       const healed = Math.min(HEAL_AMOUNT, player.maxHp - player.hp);
       player.hp += healed;
       this.broadcast("heal_effect", { sessionId: client.sessionId, amount: healed });
+    });
+
+    // ── Power Shot (Ranger) — extra arrow that doesn't reset attack timer ──
+    this.onMessage("power_shot", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "ranger") return;
+      if (player.mp < POWER_SHOT_COST) return;
+      if (!player.targetId) return;
+
+      const cfg = CLASS_CONFIG.ranger;
+      const px = player.x, py = player.y;
+
+      // Check slime target
+      const slime = this.state.slimes.get(player.targetId);
+      if (slime && slime.alive) {
+        const d = dist(px, py, slime.x, slime.y);
+        if (d > cfg.range) return;
+        player.mp -= POWER_SHOT_COST;
+        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        slime.hp = Math.max(0, slime.hp - damage);
+        slime.targetPlayerId = client.sessionId;
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: slime.x + TILE_SIZE / 2, toY: slime.y });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        if (slime.hp <= 0) {
+          slime.alive = false; slime.targetPlayerId = "";
+          player.targetId = "";
+          let sIdx = 0;
+          this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
+          const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
+          player.xp += xpGain;
+          const newLevel = levelFromXp(player.xp);
+          if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+          this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
+        }
+        return;
+      }
+
+      // Check wolf target
+      const wolf = this.state.wolves.get(player.targetId);
+      if (wolf && wolf.alive) {
+        const d = dist(px, py, wolf.x, wolf.y);
+        if (d > cfg.range) return;
+        player.mp -= POWER_SHOT_COST;
+        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        wolf.hp = Math.max(0, wolf.hp - damage);
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: wolf.x + TILE_SIZE / 2, toY: wolf.y });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        if (wolf.hp <= 0) {
+          wolf.alive = false; wolf.targetPlayerId = ""; player.targetId = "";
+          player.xp += WOLF_XP;
+          const newLevel = levelFromXp(player.xp);
+          if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+          this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
+        }
+        return;
+      }
+
+      // Check player target (PvP)
+      const target = this.state.players.get(player.targetId);
+      if (target && target.hp > 0) {
+        const d = dist(px, py, target.x, target.y);
+        if (d > cfg.range) return;
+        player.mp -= POWER_SHOT_COST;
+        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        target.hp = Math.max(0, target.hp - damage);
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: target.x + TILE_SIZE / 2, toY: target.y });
+        this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage });
+        if (target.hp <= 0) { player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS); }
+      }
+    });
+
+    // ── Cleave (Warrior) — hit ALL adjacent enemies ──
+    this.onMessage("cleave", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "warrior") return;
+      if (player.mp < CLEAVE_COST) return;
+      player.mp -= CLEAVE_COST;
+
+      const cfg = CLASS_CONFIG.warrior;
+      const px = player.x, py = player.y;
+      let hitCount = 0;
+
+      // Hit all adjacent slimes
+      this.state.slimes.forEach((slime, slimeId) => {
+        if (!slime.alive) return;
+        const d = dist(px, py, slime.x, slime.y);
+        if (d > 1) return;
+        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        slime.hp = Math.max(0, slime.hp - damage);
+        slime.targetPlayerId = client.sessionId;
+        this.broadcast("hit", { targetId: slimeId, damage, attackerId: client.sessionId });
+        hitCount++;
+        if (slime.hp <= 0) {
+          slime.alive = false; slime.targetPlayerId = "";
+          if (player.targetId === slimeId) player.targetId = "";
+          let sIdx = 0;
+          this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
+          const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
+          player.xp += xpGain;
+          this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
+        }
+      });
+
+      // Hit all adjacent wolves
+      this.state.wolves.forEach((wolf, wolfId) => {
+        if (!wolf.alive) return;
+        const d = dist(px, py, wolf.x, wolf.y);
+        if (d > 1) return;
+        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        wolf.hp = Math.max(0, wolf.hp - damage);
+        this.broadcast("hit", { targetId: wolfId, damage, attackerId: client.sessionId });
+        hitCount++;
+        if (wolf.hp <= 0) {
+          wolf.alive = false; wolf.targetPlayerId = "";
+          if (player.targetId === wolfId) player.targetId = "";
+          player.xp += WOLF_XP;
+          this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+          this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
+        }
+      });
+
+      // Hit all adjacent players
+      this.state.players.forEach((target, sid) => {
+        if (sid === client.sessionId || target.hp <= 0) return;
+        const d = dist(px, py, target.x, target.y);
+        if (d > 1) return;
+        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        target.hp = Math.max(0, target.hp - damage);
+        this.broadcast("pvp_hit", { targetId: sid, attackerName: player.name, damage });
+        hitCount++;
+        if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS); }
+      });
+
+      // Check for level up
+      const newLevel = levelFromXp(player.xp);
+      if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+
+      // Broadcast cleave visual
+      this.broadcast("cleave_effect", { sessionId: client.sessionId, x: px, y: py, hits: hitCount });
     });
 
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);

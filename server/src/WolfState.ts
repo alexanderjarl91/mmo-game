@@ -8,4 +8,6 @@ export class WolfState extends Schema {
   @type("number") maxHp: number = 150;
   @type("boolean") alive: boolean = true;
   @type("string") targetPlayerId: string = ""; // who it's chasing
+  spawnX: number = 0; // not synced to client
+  spawnY: number = 0;
 }

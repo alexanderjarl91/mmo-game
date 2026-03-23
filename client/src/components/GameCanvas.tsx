@@ -350,6 +350,20 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         }
       });
 
+      room.onMessage("cleave_effect", (data: { sessionId: string; x: number; y: number; hits: number }) => {
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          damageNumbersRef.current.push({
+            x: p.displayX + TILE_SIZE / 2,
+            y: p.displayY - 20,
+            damage: data.hits,
+            time: performance.now(),
+            color: "#f39c12",
+            prefix: "⚔️ ",
+          });
+        }
+      });
+
       // Players
       room.state.players.onAdd((player: any, sessionId: string) => {
         const data: PlayerData = {
@@ -548,6 +562,12 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
+      if (e.key === "2") {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (me?.playerClass === "ranger") roomRef.current?.send("power_shot");
+        else roomRef.current?.send("cleave");
+        return;
+      }
       if (["w","a","s","d","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) {
         e.preventDefault(); keysRef.current.add(e.key);
       }
@@ -743,9 +763,9 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
         ctx.restore();
 
-        // HP bar (only if damaged or targeted)
+        // HP bar (only if damaged or targeted) — consistent 40px width
         if (s.hp < s.maxHp || isTargeted) {
-          drawHPBar(ctx, sx, sy - baseR - 12 - bounce, s.hp, s.maxHp, 36 * sizeScale);
+          drawHPBar(ctx, sx, sy - baseR - 8 - bounce, s.hp, s.maxHp, 40);
         }
       });
 
@@ -814,14 +834,14 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
         ctx.restore();
 
-        // Name
+        // Name above HP bar
         ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("🐺 Wolf", wx + 1, wy - 29);
-        ctx.fillStyle = "#ff6b6b"; ctx.fillText("🐺 Wolf", wx, wy - 30);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Wolf", wx + 1, wy - 37);
+        ctx.fillStyle = "#ff6b6b"; ctx.fillText("Wolf", wx, wy - 38);
 
         // HP bar
         if (wolf.hp < wolf.maxHp || isWolfTargeted) {
-          drawHPBar(ctx, wx, wy - 36, wolf.hp, wolf.maxHp, 40);
+          drawHPBar(ctx, wx, wy - 30, wolf.hp, wolf.maxHp, 40);
         }
       });
 
@@ -882,19 +902,14 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           ctx.beginPath(); ctx.arc(px, py, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
         }
 
-        ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(p.name, px + 1, py - 41);
-        ctx.fillStyle = "#fff"; ctx.fillText(p.name, px, py - 42);
+        // Name above HP bar
+        const nameStr = p.level > 1 ? `${p.name} [${p.level}]` : p.name;
+        ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, px + 1, py - 41);
+        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, px, py - 42);
 
-        // Level badge
-        if (p.level > 1) {
-          ctx.font = "bold 10px 'Segoe UI', sans-serif";
-          ctx.fillStyle = "#FFD700";
-          ctx.fillText(`Lv.${p.level}`, px, py - 52);
-        }
-
-        // HP bar above name (show for all players)
-        drawHPBar(ctx, px, py - 58, p.hp, p.maxHp, 40);
+        // HP bar below name
+        drawHPBar(ctx, px, py - 34, p.hp, p.maxHp, 40);
 
         // Dead overlay
         if (p.hp <= 0) {
@@ -1062,9 +1077,11 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         const barX = Math.floor(w / 2 - barW / 2);
         const barBY = h - SLOT_SIZE - 12;
 
+        const isRanger = me.playerClass === "ranger";
+        const ATTACK_SPELL_COST = 30;
         const spells = [
           { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp },
-          { key: "2", icon: "", name: "", cost: 0, active: false, canUse: false },
+          { key: "2", icon: isRanger ? "🏹" : "⚔️", name: isRanger ? "P.Shot" : "Cleave", cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (isRanger ? !!me.targetId : true) },
           { key: "3", icon: "", name: "", cost: 0, active: false, canUse: false },
           { key: "4", icon: "", name: "", cost: 0, active: false, canUse: false },
         ];
@@ -1199,6 +1216,8 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
               onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
             <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 14, width: 56, height: 56 }}
               onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
+            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 14, width: 56, height: 56 }}
+              onTouchStart={(e) => { e.preventDefault(); const me = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(me?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
             <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}
               onTouchStart={(e) => { e.preventDefault(); talkToNearbyNPC(); }}>💬</div>
             <div style={{ ...btnStyle, fontSize: 14, width: 56, height: 56 }}
