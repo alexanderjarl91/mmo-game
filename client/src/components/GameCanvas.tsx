@@ -32,6 +32,9 @@ interface SlimeData {
 
 interface WolfData {
   displayX: number; displayY: number;
+  fromX: number; fromY: number;
+  toX: number; toY: number;
+  moveStartTime: number;
   serverX: number; serverY: number;
   hp: number; maxHp: number;
   alive: boolean;
@@ -263,7 +266,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         npcDialogueRef.current = { ...data, time: performance.now() };
       });
 
-      room.onMessage("hit", (data: { targetId: string; damage: number }) => {
+      room.onMessage("hit", (data: { targetId: string; damage: number; x?: number; y?: number }) => {
         const slime = slimesRef.current.get(data.targetId);
         if (slime) {
           slime.hitTime = performance.now();
@@ -280,6 +283,16 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           damageNumbersRef.current.push({
             x: wolf.displayX + TILE_SIZE / 2,
             y: wolf.displayY,
+            damage: data.damage,
+            time: performance.now(),
+          });
+        }
+        // Player hit (by wolf or other mob)
+        const player = playersRef.current.get(data.targetId);
+        if (player) {
+          damageNumbersRef.current.push({
+            x: player.displayX + TILE_SIZE / 2,
+            y: player.displayY,
             damage: data.damage,
             time: performance.now(),
           });
@@ -390,6 +403,9 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       room.state.wolves.onAdd((wolf: any, id: string) => {
         const data: WolfData = {
           displayX: wolf.x, displayY: wolf.y,
+          fromX: wolf.x, fromY: wolf.y,
+          toX: wolf.x, toY: wolf.y,
+          moveStartTime: 0,
           serverX: wolf.x, serverY: wolf.y,
           hp: wolf.hp, maxHp: wolf.maxHp,
           alive: wolf.alive,
@@ -400,8 +416,13 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         wolf.onChange(() => {
           const w = wolvesRef.current.get(id);
           if (!w) return;
-          w.displayX = wolf.x; w.displayY = wolf.y;
-          w.serverX = wolf.x; w.serverY = wolf.y;
+          const newX = wolf.x, newY = wolf.y;
+          if (newX !== w.serverX || newY !== w.serverY) {
+            w.fromX = w.displayX; w.fromY = w.displayY;
+            w.toX = newX; w.toY = newY;
+            w.moveStartTime = performance.now();
+          }
+          w.serverX = newX; w.serverY = newY;
           w.hp = wolf.hp; w.maxHp = wolf.maxHp;
           w.alive = wolf.alive;
           w.targetPlayerId = wolf.targetPlayerId || "";
@@ -571,6 +592,21 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         s.displayY = getDisplayPos(s.fromY, s.toY, s.moveStartTime, now);
         if (s.moveStartTime > 0 && now - s.moveStartTime >= MOVE_DURATION * 3) {
           s.displayX = s.toX; s.displayY = s.toY; s.fromX = s.toX; s.fromY = s.toY; s.moveStartTime = 0;
+        }
+      });
+
+      // Update wolf positions (smooth interpolation)
+      const WOLF_MOVE_DURATION = 300; // ms to lerp between tiles
+      wolvesRef.current.forEach((w) => {
+        if (w.moveStartTime > 0) {
+          const t = Math.min((now - w.moveStartTime) / WOLF_MOVE_DURATION, 1);
+          w.displayX = w.fromX + (w.toX - w.fromX) * t;
+          w.displayY = w.fromY + (w.toY - w.fromY) * t;
+          if (t >= 1) {
+            w.displayX = w.toX; w.displayY = w.toY;
+            w.fromX = w.toX; w.fromY = w.toY;
+            w.moveStartTime = 0;
+          }
         }
       });
 

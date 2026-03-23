@@ -31,9 +31,10 @@ const COLORS = [
 const WOLF_HP = 150;
 const WOLF_ATK = 20;
 const WOLF_XP = 75;
-const WOLF_CHASE_RANGE = 6; // tiles — aggro radius
+const WOLF_CHASE_RANGE = 8; // tiles — aggro radius
+const WOLF_LEASH_RANGE = 16; // tiles — how far they chase before giving up
 const WOLF_ATTACK_RANGE = 1; // melee
-const WOLF_MOVE_INTERVAL_MS = 600; // faster than slimes
+const WOLF_MOVE_INTERVAL_MS = 500; // slightly faster than player movement
 const WOLF_ATTACK_INTERVAL_MS = 1500;
 const WOLF_RESPAWN_MS = 30000;
 const WOLF_SPAWN_COUNT = 8;
@@ -365,12 +366,12 @@ export class GameRoom extends Room<GameState> {
           }
         });
 
-        // If we have a target from aggro, keep chasing even if out of initial range
+        // If already aggroed, keep chasing up to leash range
         if (!closest && wolf.targetPlayerId) {
           const tracked = this.state.players.get(wolf.targetPlayerId);
           if (tracked && tracked.hp > 0) {
             const d = Math.abs(Math.round(tracked.x / TILE_SIZE) - wtx) + Math.abs(Math.round(tracked.y / TILE_SIZE) - wty);
-            if (d <= WOLF_CHASE_RANGE + 3) { // leash range slightly bigger
+            if (d <= WOLF_LEASH_RANGE) {
               closest = tracked;
               closestSid = wolf.targetPlayerId;
               closestDist = d;
@@ -555,8 +556,10 @@ export class GameRoom extends Room<GameState> {
       // Validate target exists
       if (tid) {
         const slime = this.state.slimes.get(tid);
+        const wolf = this.state.wolves.get(tid);
         const targetPlayer = this.state.players.get(tid);
-        if ((!slime || !slime.alive) && (!targetPlayer || targetPlayer.hp <= 0 || tid === client.sessionId)) {
+        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
+        if (!valid) {
           player.targetId = "";
           return;
         }
