@@ -59,8 +59,7 @@ const EMOTE_DURATION = 2000;
 const NPC_DIALOGUE_DURATION = 5000;
 const DAMAGE_DURATION = 1200;
 
-const SPRITE_W = 64, SPRITE_H = 64, WALK_FRAMES = 9, ANIM_SPEED = 80;
-const DIR_ROW: Record<string, number> = { up: 8, left: 9, down: 10, right: 11 };
+const SPRITE_SZ = 32; // DCSS sprites are 32x32, rendered at TILE_SIZE (64)
 const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 
@@ -83,10 +82,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string } | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
-  const warriorSpriteRef = useRef<HTMLImageElement | null>(null);
-  const rangerSpriteRef = useRef<HTMLImageElement | null>(null);
-  const grassTileRef = useRef<HTMLImageElement | null>(null);
-  const grassTile2Ref = useRef<HTMLImageElement | null>(null);
+  const spritesRef = useRef<Record<string, HTMLImageElement>>({});
   const tileCacheRef = useRef<HTMLCanvasElement | null>(null);
 
   const lastMoveTimeRef = useRef(0);
@@ -112,111 +108,78 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   useEffect(() => {
     const load = (src: string): Promise<HTMLImageElement> =>
       new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(img); img.src = src; });
-    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png")]).then(([warrior, ranger, npc, grass, grass2]) => {
-      warriorSpriteRef.current = warrior.complete && warrior.naturalWidth ? warrior : null;
-      rangerSpriteRef.current = ranger.complete && ranger.naturalWidth ? ranger : null;
-      npcSpriteRef.current = npc.complete && npc.naturalWidth ? npc : null;
-      grassTileRef.current = grass.complete && grass.naturalWidth ? grass : null;
-      grassTile2Ref.current = grass2.complete && grass2.naturalWidth ? grass2 : null;
+    const spriteNames = [
+      "grass", "grass_flowers", "dirt", "cobble", "path", "stone_floor",
+      "water", "shallow_water", "tree", "wall", "stone_wall", "rock", "door",
+      "warrior", "ranger", "wolf",
+      "slime_green", "slime_blue", "slime_red", "slime_purple", "slime_big",
+      "npc_dwarf", "npc_elf", "npc_sage", "npc_halfling",
+    ];
+    Promise.all(spriteNames.map(n => load(`/assets/dcss/${n}.png`))).then((imgs) => {
+      imgs.forEach((img, i) => {
+        if (img.complete && img.naturalWidth) spritesRef.current[spriteNames[i]] = img;
+      });
+      buildTileCache();
     });
   }, []);
 
-  const npcSpriteRef = useRef<HTMLImageElement | null>(null);
-  const tintCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
-
-  const getClassSprite = (cls: string): HTMLImageElement | null => {
-    return cls === "ranger" ? rangerSpriteRef.current : warriorSpriteRef.current;
-  };
-
-  const getTintedSprite = (color: string): HTMLCanvasElement | null => {
-    const cached = tintCacheRef.current.get(color);
-    if (cached) return cached;
-    const src = npcSpriteRef.current;
-    if (!src) return null;
-    const c = document.createElement("canvas");
-    c.width = src.width; c.height = src.height;
-    const ctx = c.getContext("2d")!;
-    ctx.drawImage(src, 0, 0);
-    ctx.globalCompositeOperation = "source-atop";
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, c.width, c.height);
-    tintCacheRef.current.set(color, c);
-    return c;
-  };
+  const spr = (name: string): HTMLImageElement | null => spritesRef.current[name] || null;
 
   /* ── Tile cache ─────────────────────────────────────── */
 
   const buildTileCache = useCallback(() => {
     const map = worldMapRef.current;
     if (!map) return;
+    const s = spritesRef.current;
+    if (!s.grass) return; // sprites not loaded yet
     const mw = mapSizeRef.current.w, mh = mapSizeRef.current.h;
     const c = document.createElement("canvas");
     c.width = mw * TILE_SIZE; c.height = mh * TILE_SIZE;
     const ctx = c.getContext("2d")!;
-    const grass = grassTileRef.current;
-    const grass2 = grassTile2Ref.current;
+    ctx.imageSmoothingEnabled = false; // crisp pixel art
+
+    const drawSpr = (img: HTMLImageElement | undefined, px: number, py: number) => {
+      if (img) ctx.drawImage(img, 0, 0, SPRITE_SZ, SPRITE_SZ, px, py, TILE_SIZE, TILE_SIZE);
+    };
+
+    const tileSprite: Record<number, string> = {
+      [TILE.GRASS]: "grass",
+      [TILE.PATH]: "path",
+      [TILE.WATER]: "water",
+      [TILE.TREE]: "tree",
+      [TILE.ROCK]: "rock",
+      [TILE.FLOWERS]: "grass_flowers",
+      [TILE.BRIDGE]: "cobble",
+      [TILE.WALL]: "wall",
+      [TILE.FLOOR]: "stone_floor",
+    };
 
     for (let ty = 0; ty < mh; ty++) {
       for (let tx = 0; tx < mw; tx++) {
         const px = tx * TILE_SIZE, py = ty * TILE_SIZE;
         const tile = map[ty]?.[tx] ?? 0;
-        const variant = ((tx * 7 + ty * 13) & 3) === 0;
-        if (grass) {
-          ctx.drawImage((variant && grass2) ? grass2 : grass, px, py, TILE_SIZE, TILE_SIZE);
-        } else {
-          ctx.fillStyle = "#2d5a1e"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        }
 
-        switch (tile) {
-          case TILE.PATH:
-            ctx.fillStyle = "rgba(194,164,110,0.7)"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.fillStyle = "rgba(160,130,80,0.3)"; ctx.fillRect(px, py, TILE_SIZE, 2); ctx.fillRect(px, py, 2, TILE_SIZE);
-            break;
-          case TILE.WATER:
-            ctx.fillStyle = "rgba(30,100,200,0.75)"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.strokeStyle = "rgba(100,180,255,0.4)"; ctx.lineWidth = 1;
-            for (let r = 0; r < 3; r++) { const ry = py + 15 + r * 16; ctx.beginPath(); ctx.moveTo(px + 8, ry); ctx.quadraticCurveTo(px + 32, ry - 5 + (r % 2) * 10, px + 56, ry); ctx.stroke(); }
-            break;
-          case TILE.TREE:
-            ctx.fillStyle = "#5D4037"; ctx.fillRect(px + 24, py + 32, 16, 28);
-            ctx.fillStyle = "rgba(0,80,0,0.9)"; ctx.beginPath(); ctx.arc(px + 32, py + 24, 22, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "rgba(50,160,50,0.8)"; ctx.beginPath(); ctx.arc(px + 30, py + 20, 18, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "rgba(100,200,80,0.5)"; ctx.beginPath(); ctx.arc(px + 26, py + 16, 8, 0, Math.PI * 2); ctx.fill();
-            break;
-          case TILE.ROCK:
-            ctx.fillStyle = "#757575"; ctx.beginPath(); ctx.ellipse(px + 32, py + 38, 24, 18, 0, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "#9E9E9E"; ctx.beginPath(); ctx.ellipse(px + 28, py + 34, 18, 14, -0.2, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "#BDBDBD"; ctx.beginPath(); ctx.ellipse(px + 26, py + 32, 6, 5, 0, 0, Math.PI * 2); ctx.fill();
-            break;
-          case TILE.FLOWERS: {
-            const fc = ["#FF5252", "#FFEB3B", "#E040FB", "#FF6D00", "#69F0AE"];
-            for (let f = 0; f < 6; f++) {
-              const fx = px + 10 + ((f * 17) % 44), fy = py + 10 + ((f * 23) % 44);
-              ctx.fillStyle = fc[f % fc.length]; ctx.beginPath(); ctx.arc(fx, fy, 4, 0, Math.PI * 2); ctx.fill();
-              ctx.fillStyle = "#FFFF00"; ctx.beginPath(); ctx.arc(fx, fy, 2, 0, Math.PI * 2); ctx.fill();
+        // Base: always draw grass underneath
+        const variant = ((tx * 7 + ty * 13) & 3) === 0;
+        drawSpr(variant ? (s.dirt || s.grass) : s.grass, px, py);
+
+        // Overlay tile sprite
+        if (tile !== TILE.GRASS) {
+          const name = tileSprite[tile];
+          if (name && s[name]) {
+            if (tile === TILE.WATER || tile === TILE.TREE || tile === TILE.ROCK || tile === TILE.WALL) {
+              // These fully replace grass
+              drawSpr(s[name], px, py);
+            } else {
+              // These overlay on grass (path, flowers, floor, bridge)
+              drawSpr(s[name], px, py);
             }
-            break;
           }
-          case TILE.BRIDGE:
-            ctx.fillStyle = "rgba(30,100,200,0.75)"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.fillStyle = "#8D6E63"; ctx.fillRect(px + 8, py, TILE_SIZE - 16, TILE_SIZE);
-            ctx.strokeStyle = "#6D4C41"; ctx.lineWidth = 1;
-            for (let p = 0; p < 4; p++) { const ly = py + 8 + p * 16; ctx.beginPath(); ctx.moveTo(px + 8, ly); ctx.lineTo(px + TILE_SIZE - 8, ly); ctx.stroke(); }
-            break;
-          case TILE.WALL:
-            ctx.fillStyle = "#795548"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.strokeStyle = "#5D4037"; ctx.lineWidth = 1;
-            for (let by = 0; by < 4; by++) { const brickY = py + by * 16; ctx.strokeRect(px, brickY, TILE_SIZE, 16); const off = (by % 2) * 32; ctx.beginPath(); ctx.moveTo(px + 32 + off, brickY); ctx.lineTo(px + 32 + off, brickY + 16); ctx.stroke(); }
-            break;
-          case TILE.FLOOR:
-            ctx.fillStyle = "#A1887F"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.strokeStyle = "#8D6E63"; ctx.lineWidth = 1; ctx.strokeRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
-            break;
         }
       }
     }
-    ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
+    // Map border
+    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, mw * TILE_SIZE, mh * TILE_SIZE);
     tileCacheRef.current = c;
   }, []);
@@ -628,6 +591,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       if (canvasSizeRef.current.w !== w || canvasSizeRef.current.h !== h) {
         canvas.width = w; canvas.height = h; canvasSizeRef.current = { w, h };
       } else { ctx.clearRect(0, 0, w, h); }
+      ctx.imageSmoothingEnabled = false; // crisp pixel art scaling
 
       const WORLD_W = mapSizeRef.current.w * TILE_SIZE;
       const WORLD_H = mapSizeRef.current.h * TILE_SIZE;
@@ -658,65 +622,46 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
       const myTargetId = me?.targetId || "";
 
+      const SLIME_SPRITES: Record<string, string> = {
+        "#2ecc71": "slime_green", "#3498db": "slime_blue",
+        "#e74c3c": "slime_red", "#9b59b6": "slime_purple",
+      };
+
       slimesRef.current.forEach((s, slimeId) => {
         if (!s.alive) return;
-        const sx = s.displayX + TILE_SIZE / 2 - camX;
-        const sy = s.displayY + TILE_SIZE / 2 - camY;
+        const sx = s.displayX - camX;
+        const sy = s.displayY - camY;
         if (sx < -80 || sx > w + 80 || sy < -80 || sy > h + 80) return;
 
         const isTargeted = myTargetId === slimeId;
         const sizeScale = s.size === "small" ? 0.7 : s.size === "big" ? 1.3 : 1.0;
-        const baseR = 16 * sizeScale;
         const isHit = s.hitTime > 0 && now - s.hitTime < 200;
+        const bounce = Math.sin(time / 400) * 2;
+        const drawSize = TILE_SIZE * sizeScale;
+        const ox = sx + (TILE_SIZE - drawSize) / 2;
+        const oy = sy + (TILE_SIZE - drawSize) / 2 + bounce;
 
-        // Bounce animation
-        const bounce = Math.abs(Math.sin(time / 400)) * 4 * sizeScale;
-
-        // Target highlight (red pulsing square)
+        // Target highlight
         if (isTargeted) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          const ts = TILE_SIZE * 0.55 * sizeScale;
-          ctx.strokeRect(sx - ts, sy - ts + 4, ts * 2, ts * 2);
+          ctx.strokeRect(ox - 2, oy - 2, drawSize + 4, drawSize + 4);
         }
 
-        // Shadow
-        ctx.beginPath();
-        ctx.ellipse(sx, sy + 18, baseR, baseR * 0.3, 0, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(0,0,0,0.25)";
-        ctx.fill();
-
-        // Body
+        // Draw slime sprite
         ctx.save();
-        if (isHit) { ctx.globalAlpha = 0.5 + Math.sin(now * 0.05) * 0.5; }
-
-        // Slime body (blobby shape)
-        ctx.beginPath();
-        ctx.ellipse(sx, sy + 6 - bounce, baseR, baseR * 0.8 + bounce * 0.3, 0, 0, Math.PI * 2);
-        ctx.fillStyle = s.color;
-        ctx.fill();
-
-        // Highlight
-        ctx.beginPath();
-        ctx.ellipse(sx - baseR * 0.3, sy - baseR * 0.2 - bounce, baseR * 0.35, baseR * 0.25, -0.3, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255,0.4)";
-        ctx.fill();
-
-        // Eyes
-        const eyeY = sy + 2 - bounce;
-        ctx.fillStyle = "#fff";
-        ctx.beginPath(); ctx.arc(sx - 5 * sizeScale, eyeY, 4 * sizeScale, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(sx + 5 * sizeScale, eyeY, 4 * sizeScale, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = "#333";
-        ctx.beginPath(); ctx.arc(sx - 4 * sizeScale, eyeY + 1, 2 * sizeScale, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(sx + 6 * sizeScale, eyeY + 1, 2 * sizeScale, 0, Math.PI * 2); ctx.fill();
-
+        if (isHit) ctx.globalAlpha = 0.5 + Math.sin(now * 0.05) * 0.5;
+        const spriteName = s.size === "big" ? "slime_big" : (SLIME_SPRITES[s.color] || "slime_green");
+        const img = spr(spriteName);
+        if (img) {
+          ctx.drawImage(img, 0, 0, SPRITE_SZ, SPRITE_SZ, ox, oy, drawSize, drawSize);
+        }
         ctx.restore();
 
-        // HP bar (only if damaged or targeted)
+        // HP bar
         if (s.hp < s.maxHp || isTargeted) {
-          drawHPBar(ctx, sx, sy - baseR - 12 - bounce, s.hp, s.maxHp, 36 * sizeScale);
+          drawHPBar(ctx, sx + TILE_SIZE / 2, sy - 4 + bounce, s.hp, s.maxHp, 36 * sizeScale);
         }
       });
 
@@ -724,110 +669,76 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
       wolvesRef.current.forEach((wolf, wolfId) => {
         if (!wolf.alive) return;
-        const wx = wolf.displayX + TILE_SIZE / 2 - camX;
-        const wy = wolf.displayY + TILE_SIZE / 2 - camY;
+        const wx = wolf.displayX - camX;
+        const wy = wolf.displayY - camY;
         if (wx < -80 || wx > w + 80 || wy < -80 || wy > h + 80) return;
 
         const isWolfTargeted = myTargetId === wolfId;
+        const wolfHitFlash = wolf.hitTime && (now - wolf.hitTime < 200);
 
         // Target highlight
         if (isWolfTargeted) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(wx - 24, wy - 20, 48, 44);
+          ctx.strokeRect(wx - 2, wy - 2, TILE_SIZE + 4, TILE_SIZE + 4);
         }
 
-        // Shadow
-        ctx.beginPath(); ctx.ellipse(wx, wy + 16, 16, 5, 0, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
-
-        // Wolf body — a dark gray canine shape
+        // Draw wolf sprite
         ctx.save();
-        // Flash red on hit
-        const wolfHitFlash = wolf.hitTime && (now - wolf.hitTime < 200);
-        if (wolfHitFlash) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
-
-        // Body (elongated oval)
-        ctx.fillStyle = "#4a4a4a";
-        ctx.beginPath();
-        ctx.ellipse(wx, wy - 2, 20, 14, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Head
-        ctx.beginPath();
-        ctx.ellipse(wx + 14, wy - 10, 10, 9, -0.3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Ears
-        ctx.fillStyle = "#3a3a3a";
-        ctx.beginPath(); ctx.moveTo(wx + 16, wy - 18); ctx.lineTo(wx + 12, wy - 26); ctx.lineTo(wx + 22, wy - 18); ctx.fill();
-        ctx.beginPath(); ctx.moveTo(wx + 20, wy - 18); ctx.lineTo(wx + 18, wy - 26); ctx.lineTo(wx + 26, wy - 18); ctx.fill();
-
-        // Eyes (red glow)
-        ctx.fillStyle = wolfHitFlash ? "#fff" : "#ff3333";
-        ctx.beginPath(); ctx.arc(wx + 18, wy - 12, 2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(wx + 12, wy - 12, 2, 0, Math.PI * 2); ctx.fill();
-
-        // Tail
-        ctx.strokeStyle = "#4a4a4a"; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.moveTo(wx - 18, wy - 2);
-        ctx.quadraticCurveTo(wx - 26, wy - 16, wx - 22, wy - 20);
-        ctx.stroke();
-
-        // Legs
-        ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 3;
-        const legBounce = Math.sin(time / 150) * 3;
-        ctx.beginPath(); ctx.moveTo(wx - 10, wy + 10); ctx.lineTo(wx - 12, wy + 18 + legBounce); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(wx - 4, wy + 10); ctx.lineTo(wx - 2, wy + 18 - legBounce); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(wx + 6, wy + 10); ctx.lineTo(wx + 4, wy + 18 + legBounce); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(wx + 12, wy + 10); ctx.lineTo(wx + 14, wy + 18 - legBounce); ctx.stroke();
-
+        if (wolfHitFlash) ctx.globalAlpha = 0.5 + Math.sin(now * 0.05) * 0.5;
+        const wolfImg = spr("wolf");
+        if (wolfImg) {
+          ctx.drawImage(wolfImg, 0, 0, SPRITE_SZ, SPRITE_SZ, wx, wy, TILE_SIZE, TILE_SIZE);
+        }
         ctx.restore();
 
         // Name
+        const cx = wx + TILE_SIZE / 2;
         ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("🐺 Wolf", wx + 1, wy - 29);
-        ctx.fillStyle = "#ff6b6b"; ctx.fillText("🐺 Wolf", wx, wy - 30);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Wolf", cx + 1, wy - 5);
+        ctx.fillStyle = "#ff6b6b"; ctx.fillText("Wolf", cx, wy - 6);
 
         // HP bar
         if (wolf.hp < wolf.maxHp || isWolfTargeted) {
-          drawHPBar(ctx, wx, wy - 36, wolf.hp, wolf.maxHp, 40);
+          drawHPBar(ctx, cx, wy - 12, wolf.hp, wolf.maxHp, 40);
         }
       });
 
       /* ── NPCs ────────────────────────────────────────── */
 
+      const NPC_SPRITES: Record<string, string> = {
+        "Elder Oak": "npc_sage", "Mira": "npc_elf", "Forge": "npc_dwarf",
+        "Pip": "npc_halfling", "Old Gil": "npc_elf",
+      };
+
       for (const npc of npcsRef.current) {
-        const nx = npc.x * TILE_SIZE + TILE_SIZE / 2 - camX;
-        const ny = npc.y * TILE_SIZE + TILE_SIZE / 2 - camY;
+        const nx = npc.x * TILE_SIZE - camX;
+        const ny = npc.y * TILE_SIZE - camY;
         if (nx < -80 || nx > w + 80 || ny < -80 || ny > h + 80) continue;
 
-        ctx.beginPath(); ctx.ellipse(nx, ny + 20, 18, 6, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
-
-        const tinted = getTintedSprite(npc.color);
-        if (tinted) {
-          const row = DIR_ROW[npc.direction] ?? DIR_ROW.down;
-          ctx.drawImage(tinted, 0, row * SPRITE_H, SPRITE_W, SPRITE_H, nx - 48, ny - 56, 96, 96);
-        } else {
-          ctx.beginPath(); ctx.arc(nx, ny, 20, 0, Math.PI * 2); ctx.fillStyle = npc.color; ctx.fill();
+        const npcImg = spr(NPC_SPRITES[npc.name] || "npc_elf");
+        if (npcImg) {
+          ctx.drawImage(npcImg, 0, 0, SPRITE_SZ, SPRITE_SZ, nx, ny, TILE_SIZE, TILE_SIZE);
         }
 
+        const cx = nx + TILE_SIZE / 2;
         ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(npc.name, nx + 1, ny - 41);
-        ctx.fillStyle = "#FFD700"; ctx.fillText(npc.name, nx, ny - 42);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(npc.name, cx + 1, ny - 5);
+        ctx.fillStyle = "#FFD700"; ctx.fillText(npc.name, cx, ny - 6);
 
         if (me) {
           const dist = Math.abs(Math.round(me.toX / TILE_SIZE) - npc.x) + Math.abs(Math.round(me.toY / TILE_SIZE) - npc.y);
-          if (dist <= 2) { ctx.font = "10px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillText("[E] Talk", nx, ny - 54); }
+          if (dist <= 2) { ctx.font = "10px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillText("[E] Talk", cx, ny - 18); }
         }
       }
 
       /* ── Players ─────────────────────────────────────── */
 
       playersRef.current.forEach((p, sid) => {
-        const px = p.displayX + TILE_SIZE / 2 - camX;
-        const py = p.displayY + TILE_SIZE / 2 - camY;
+        const px = p.displayX - camX;
+        const py = p.displayY - camY;
+        const cx = px + TILE_SIZE / 2;
         if (px < -80 || px > w + 80 || py < -80 || py > h + 80) return;
 
         // PvP target highlight
@@ -835,46 +746,47 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(px - 28, py - 28, 56, 56);
+          ctx.strokeRect(px - 2, py - 2, TILE_SIZE + 4, TILE_SIZE + 4);
         }
 
-        ctx.beginPath(); ctx.ellipse(px, py + 20, 18, 6, 0, 0, Math.PI * 2); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
-
-        const sprite = getClassSprite(p.playerClass);
-        if (sprite) {
-          const row = DIR_ROW[p.direction] ?? DIR_ROW.down;
-          let frame = 0;
-          if (p.moveStartTime > 0 || p.moving) frame = Math.floor(time / ANIM_SPEED) % (WALK_FRAMES - 1) + 1;
-          ctx.drawImage(sprite, frame * SPRITE_W, row * SPRITE_H, SPRITE_W, SPRITE_H, px - 48, py - 56, 96, 96);
-
+        // Draw player sprite
+        const spriteName = p.playerClass === "ranger" ? "ranger" : "warrior";
+        const playerImg = spr(spriteName);
+        if (playerImg) {
+          ctx.save();
+          if (p.hp <= 0) ctx.globalAlpha = 0.4;
+          ctx.drawImage(playerImg, 0, 0, SPRITE_SZ, SPRITE_SZ, px, py, TILE_SIZE, TILE_SIZE);
+          ctx.restore();
         } else {
-          ctx.beginPath(); ctx.arc(px, py, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
+          ctx.beginPath(); ctx.arc(cx, py + TILE_SIZE / 2, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
+        }
+
+        // Self indicator (subtle white border)
+        if (sid === sessionIdRef.current) {
+          ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1;
+          ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
         }
 
         const classIcon = p.playerClass === "ranger" ? "🏹" : "⚔️";
         const nameStr = `${classIcon} ${p.name}`;
-        ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, px + 1, py - 41);
-        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, px, py - 42);
+        ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, cx + 1, py - 5);
+        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, cx, py - 6);
 
         // Level badge
         if (p.level > 1) {
           ctx.font = "bold 10px 'Segoe UI', sans-serif";
           ctx.fillStyle = "#FFD700";
-          ctx.fillText(`Lv.${p.level}`, px, py - 52);
+          ctx.fillText(`Lv.${p.level}`, cx, py - 16);
         }
 
-        // HP bar above name (show for all players)
-        drawHPBar(ctx, px, py - 58, p.hp, p.maxHp, 40);
+        // HP bar
+        drawHPBar(ctx, cx, py - 22, p.hp, p.maxHp, 40);
 
         // Dead overlay
         if (p.hp <= 0) {
-          ctx.save();
-          ctx.globalAlpha = 0.6;
-          ctx.font = "24px serif";
-          ctx.textAlign = "center";
-          ctx.fillText("💀", px, py + 5);
-          ctx.restore();
+          ctx.font = "24px serif"; ctx.textAlign = "center";
+          ctx.fillText("💀", cx, py + TILE_SIZE / 2 + 8);
         }
       });
 
