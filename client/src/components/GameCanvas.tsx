@@ -1409,41 +1409,44 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         </div>
       )}
 
-      {/* Mobile HUD */}
+      {/* Mobile HUD — Top Bar */}
       {isMobile && myStats && (
-        <div style={{ position: "absolute", top: 8, left: 8, right: 8, background: "rgba(0,0,0,0.7)", borderRadius: 8, padding: "6px 10px", zIndex: 10, color: "#fff", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level} | HP: {myStats.hp}/{myStats.maxHp}</div>
-          <div style={{ color: "#f1c40f" }}>💰 {myStats.gold}</div>
+        <div style={{ position: "absolute", top: 8, left: 8, right: 8, background: "rgba(0,0,0,0.7)", borderRadius: 8, padding: "8px 12px", zIndex: 10, color: "#fff", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <span>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level}</span>
+            <span>❤️ {myStats.hp}/{myStats.maxHp}</span>
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <span style={{ color: "#f1c40f", fontWeight: "bold", fontSize: 13 }}>💰 {myStats.gold}</span>
+            <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); alert("Inventory coming soon!"); }}>🎒</div>
+          </div>
         </div>
       )}
 
       {isMobile && (
         <>
-          {/* D-pad */}
-          <div style={{ position: "absolute", bottom: 20, left: 16, display: "grid", gridTemplateColumns: "52px 52px 52px", gridTemplateRows: "52px 52px 52px", gap: 4, zIndex: 10 }}>
+          {/* D-pad (bottom-left) */}
+          <div style={{ position: "absolute", bottom: 16, left: 12, display: "grid", gridTemplateColumns: "48px 48px 48px", gridTemplateRows: "48px 48px 48px", gap: 3, zIndex: 10 }}>
             <div /><div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(0, -1, true); }} onTouchEnd={() => handleDpad(0, -1, false)} onTouchCancel={() => handleDpad(0, -1, false)}>▲</div><div />
             <div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(-1, 0, true); }} onTouchEnd={() => handleDpad(-1, 0, false)} onTouchCancel={() => handleDpad(-1, 0, false)}>◀</div>
-            <div style={{ width: 52, height: 52 }} />
+            <div style={{ width: 48, height: 48 }} />
             <div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(1, 0, true); }} onTouchEnd={() => handleDpad(1, 0, false)} onTouchCancel={() => handleDpad(1, 0, false)}>▶</div>
             <div /><div style={btnStyle} onTouchStart={(e) => { e.preventDefault(); handleDpad(0, 1, true); }} onTouchEnd={() => handleDpad(0, 1, false)} onTouchCancel={() => handleDpad(0, 1, false)}>▼</div><div />
           </div>
 
-          {/* Action buttons (2 columns) */}
-          <div style={{ position: "absolute", bottom: 20, right: 12, display: "grid", gridTemplateColumns: "50px 50px", gap: 6, zIndex: 10 }}>
-            <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
-            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); const m = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(m?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
-            <div style={{ ...btnStyle, background: "rgba(231,76,60,0.4)", fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "health_potion" }); lastPotionUse.current = now; } }}>❤️</div>
-            <div style={{ ...btnStyle, background: "rgba(52,152,219,0.4)", fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "mana_potion" }); lastPotionUse.current = now; } }}>💙</div>
-            <div style={{ ...btnStyle, background: myStats?.targetId ? "rgba(231,76,60,0.6)" : "rgba(0,0,0,0.3)", fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
-            <div style={{ ...btnStyle, fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); talkToNearbyNPC(); }}>💬</div>
-            <div style={{ ...btnStyle, fontSize: 12, width: 50, height: 50 }}
-              onTouchStart={(e) => { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); }}>✏️</div>
+          {/* Spell bar (bottom center) */}
+          <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 4, zIndex: 10 }}>
+            <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
+            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const m = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(m?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
+            <div style={{ ...btnStyle, background: "rgba(231,76,60,0.4)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "health_potion" }); lastPotionUse.current = now; } }}>❤️</div>
+            <div style={{ ...btnStyle, background: "rgba(52,152,219,0.4)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "mana_potion" }); lastPotionUse.current = now; } }}>💙</div>
+          </div>
+
+          {/* Quick actions (bottom-right) */}
+          <div style={{ position: "absolute", bottom: 16, right: 12, display: "flex", flexDirection: "column", gap: 4, zIndex: 10 }}>
+            <div style={{ ...btnStyle, background: myStats?.targetId ? "rgba(231,76,60,0.6)" : "rgba(0,0,0,0.3)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); sendClearTarget(); }}>🚫</div>
+            <div style={{ ...btnStyle, fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); talkToNearbyNPC(); }}>💬</div>
+            <div style={{ ...btnStyle, fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); }}>✏️</div>
           </div>
         </>
       )}
