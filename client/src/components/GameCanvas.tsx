@@ -59,7 +59,26 @@ const EMOTE_DURATION = 2000;
 const NPC_DIALOGUE_DURATION = 5000;
 const DAMAGE_DURATION = 1200;
 
-const SPRITE_SZ = 32; // DCSS sprites are 32x32, rendered at TILE_SIZE (64)
+// Mystic Woods sprite sizes
+const PLAYER_FW = 48, PLAYER_FH = 48; // player frame size
+const SLIME_FW = 32, SLIME_FH = 32;   // slime frame size
+const TILE_SRC = 16; // source tile size (16x16)
+const ANIM_SPEED = 120; // ms per animation frame
+
+// Player spritesheet rows (48x48, 6 cols)
+const P_IDLE: Record<string, number> = { down: 0, left: 1, right: 2, up: 3 };
+const P_WALK: Record<string, number> = { down: 4, left: 5, right: 6, up: 3 }; // no walk-up, use idle
+const P_WALK_FRAMES = 6;
+const P_IDLE_FRAMES = 6;
+
+// Slime spritesheet rows (32x32, 7 cols)
+const S_IDLE = 0, S_HOP = 1, S_DEATH = 4;
+const S_FRAMES = 7;
+
+// Skeleton spritesheet rows (48x48, 6 cols) - used for wolves
+const SK_IDLE: Record<string, number> = { down: 0, left: 1, right: 2, up: 3 };
+const SK_WALK: Record<string, number> = { down: 4, left: 5, right: 6, up: 3 };
+
 const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 
@@ -109,13 +128,10 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
     const load = (src: string): Promise<HTMLImageElement> =>
       new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(img); img.src = src; });
     const spriteNames = [
-      "grass", "grass_flowers", "dirt", "cobble", "path", "stone_floor",
-      "water", "shallow_water", "tree", "wall", "stone_wall", "rock", "door",
-      "warrior", "ranger", "wolf",
-      "slime_green", "slime_blue", "slime_red", "slime_purple", "slime_big",
-      "npc_dwarf", "npc_elf", "npc_sage", "npc_halfling",
+      "warrior", "ranger", "slime", "skeleton",
+      "plains", "objects", "grass", "walls", "wooden",
     ];
-    Promise.all(spriteNames.map(n => load(`/assets/dcss/${n}.png`))).then((imgs) => {
+    Promise.all(spriteNames.map(n => load(`/assets/mystic/${n}.png`))).then((imgs) => {
       imgs.forEach((img, i) => {
         if (img.complete && img.naturalWidth) spritesRef.current[spriteNames[i]] = img;
       });
@@ -131,56 +147,113 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
     const map = worldMapRef.current;
     if (!map) return;
     const s = spritesRef.current;
-    if (!s.grass) return; // sprites not loaded yet
+    if (!s.plains) return; // sprites not loaded yet
     const mw = mapSizeRef.current.w, mh = mapSizeRef.current.h;
     const c = document.createElement("canvas");
     c.width = mw * TILE_SIZE; c.height = mh * TILE_SIZE;
     const ctx = c.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false; // crisp pixel art
+    ctx.imageSmoothingEnabled = false;
 
-    const drawSpr = (img: HTMLImageElement | undefined, px: number, py: number) => {
-      if (img) ctx.drawImage(img, 0, 0, SPRITE_SZ, SPRITE_SZ, px, py, TILE_SIZE, TILE_SIZE);
+    // Helper: draw a 16x16 region from atlas scaled to TILE_SIZE
+    const drawTile = (atlas: HTMLImageElement, sx: number, sy: number, dx: number, dy: number) => {
+      ctx.drawImage(atlas, sx, sy, TILE_SRC, TILE_SRC, dx, dy, TILE_SIZE, TILE_SIZE);
     };
 
-    const tileSprite: Record<number, string> = {
-      [TILE.GRASS]: "grass",
-      [TILE.PATH]: "path",
-      [TILE.WATER]: "water",
-      [TILE.TREE]: "tree",
-      [TILE.ROCK]: "rock",
-      [TILE.FLOWERS]: "grass_flowers",
-      [TILE.BRIDGE]: "cobble",
-      [TILE.WALL]: "wall",
-      [TILE.FLOOR]: "stone_floor",
+    // Helper: draw a larger object from atlas
+    const drawObj = (atlas: HTMLImageElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number) => {
+      ctx.drawImage(atlas, sx, sy, sw, sh, dx, dy, dw, dh);
     };
+
+    const plains = s.plains;
+    const objects = s.objects;
+    const walls = s.walls;
+    const wooden = s.wooden;
+
+    // Source coords in plains.png (16x16 tiles):
+    // Grass: row 5, col 0 (x=0, y=64)
+    // Dirt: row 5, col 3 (x=48, y=64)  
+    // Cobble/path: row 9, col 2 (x=32, y=144) 
+    // Cliff face: row 7, col 0 (x=0, y=96)
 
     for (let ty = 0; ty < mh; ty++) {
       for (let tx = 0; tx < mw; tx++) {
         const px = tx * TILE_SIZE, py = ty * TILE_SIZE;
         const tile = map[ty]?.[tx] ?? 0;
 
-        // Base: always draw grass underneath
-        const variant = ((tx * 7 + ty * 13) & 3) === 0;
-        drawSpr(variant ? (s.dirt || s.grass) : s.grass, px, py);
+        // Base grass (with slight variation)
+        const variant = ((tx * 7 + ty * 13) % 4);
+        if (plains) {
+          if (variant === 0) drawTile(plains, 16, 64, px, py); // grass variant
+          else drawTile(plains, 0, 64, px, py); // base grass
+        } else {
+          ctx.fillStyle = "#4a7a2e"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+        }
 
-        // Overlay tile sprite
-        if (tile !== TILE.GRASS) {
-          const name = tileSprite[tile];
-          if (name && s[name]) {
-            if (tile === TILE.WATER || tile === TILE.TREE || tile === TILE.ROCK || tile === TILE.WALL) {
-              // These fully replace grass
-              drawSpr(s[name], px, py);
+        switch (tile) {
+          case TILE.PATH:
+            if (plains) drawTile(plains, 32, 144, px, py); // cobblestone
+            break;
+          case TILE.WATER:
+            ctx.fillStyle = "#2855a0"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.fillStyle = "rgba(60,140,220,0.4)";
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            // Water ripple detail
+            ctx.strokeStyle = "rgba(120,180,255,0.3)"; ctx.lineWidth = 1;
+            const wo = ((tx + ty) * 13) % 20;
+            ctx.beginPath(); ctx.moveTo(px + 8, py + 20 + wo % 8);
+            ctx.quadraticCurveTo(px + 32, py + 14 + wo % 12, px + 56, py + 22 + wo % 8);
+            ctx.stroke();
+            break;
+          case TILE.TREE:
+            if (objects) {
+              // Draw tree from objects.png (~48x56 tree at x=48, y=88)
+              drawObj(objects, 48, 88, 40, 48, px - 16, py - 48, 96, 112);
             } else {
-              // These overlay on grass (path, flowers, floor, bridge)
-              drawSpr(s[name], px, py);
+              ctx.fillStyle = "#2d5a1e"; ctx.beginPath();
+              ctx.arc(px + 32, py + 20, 28, 0, Math.PI * 2); ctx.fill();
             }
-          }
+            break;
+          case TILE.ROCK:
+            if (objects) {
+              // Rock from objects.png (x=0, y=0, 16x16)
+              drawObj(objects, 0, 0, 16, 16, px + 8, py + 8, 48, 48);
+            } else {
+              ctx.fillStyle = "#666"; ctx.beginPath();
+              ctx.ellipse(px + 32, py + 36, 22, 16, 0, 0, Math.PI * 2); ctx.fill();
+            }
+            break;
+          case TILE.FLOWERS:
+            // Grass + flower overlay
+            if (objects) {
+              drawObj(objects, 128, 56, 8, 8, px + 16, py + 16, 32, 32);
+            }
+            break;
+          case TILE.BRIDGE:
+            ctx.fillStyle = "#2855a0"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            if (wooden) {
+              drawTile(wooden, 0, 0, px, py);
+            } else {
+              ctx.fillStyle = "#8D6E63"; ctx.fillRect(px + 8, py, TILE_SIZE - 16, TILE_SIZE);
+            }
+            break;
+          case TILE.WALL:
+            if (walls) {
+              // Brown wall from walls.png
+              drawTile(walls, 48, 16, px, py);
+            } else {
+              ctx.fillStyle = "#795548"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            }
+            break;
+          case TILE.FLOOR:
+            if (plains) {
+              drawTile(plains, 48, 64, px, py); // dirt tile as floor
+            } else {
+              ctx.fillStyle = "#A1887F"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            }
+            break;
         }
       }
     }
-    // Map border
-    ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 2;
-    ctx.strokeRect(0, 0, mw * TILE_SIZE, mh * TILE_SIZE);
     tileCacheRef.current = c;
   }, []);
 
@@ -622,10 +695,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
       const myTargetId = me?.targetId || "";
 
-      const SLIME_SPRITES: Record<string, string> = {
-        "#2ecc71": "slime_green", "#3498db": "slime_blue",
-        "#e74c3c": "slime_red", "#9b59b6": "slime_purple",
-      };
+      const slimeSheet = spr("slime");
 
       slimesRef.current.forEach((s, slimeId) => {
         if (!s.alive) return;
@@ -636,10 +706,9 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         const isTargeted = myTargetId === slimeId;
         const sizeScale = s.size === "small" ? 0.7 : s.size === "big" ? 1.3 : 1.0;
         const isHit = s.hitTime > 0 && now - s.hitTime < 200;
-        const bounce = Math.sin(time / 400) * 2;
         const drawSize = TILE_SIZE * sizeScale;
         const ox = sx + (TILE_SIZE - drawSize) / 2;
-        const oy = sy + (TILE_SIZE - drawSize) / 2 + bounce;
+        const oy = sy + (TILE_SIZE - drawSize) / 2;
 
         // Target highlight
         if (isTargeted) {
@@ -649,23 +718,34 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           ctx.strokeRect(ox - 2, oy - 2, drawSize + 4, drawSize + 4);
         }
 
-        // Draw slime sprite
+        // Animated slime sprite
         ctx.save();
         if (isHit) ctx.globalAlpha = 0.5 + Math.sin(now * 0.05) * 0.5;
-        const spriteName = s.size === "big" ? "slime_big" : (SLIME_SPRITES[s.color] || "slime_green");
-        const img = spr(spriteName);
-        if (img) {
-          ctx.drawImage(img, 0, 0, SPRITE_SZ, SPRITE_SZ, ox, oy, drawSize, drawSize);
+        // Color tint for different slime types
+        if (slimeSheet) {
+          const isMoving = s.moveStartTime > 0 && now - s.moveStartTime < 500;
+          const row = isMoving ? S_HOP : S_IDLE;
+          const frame = Math.floor(time / ANIM_SPEED) % S_FRAMES;
+          ctx.drawImage(slimeSheet, frame * SLIME_FW, row * SLIME_FH, SLIME_FW, SLIME_FH, ox, oy, drawSize, drawSize);
+          // Color overlay for different slime types
+          if (s.color !== "#2ecc71") {
+            ctx.globalCompositeOperation = "source-atop";
+            ctx.globalAlpha = 0.3;
+            ctx.fillStyle = s.color;
+            ctx.fillRect(ox, oy, drawSize, drawSize);
+          }
         }
         ctx.restore();
 
         // HP bar
         if (s.hp < s.maxHp || isTargeted) {
-          drawHPBar(ctx, sx + TILE_SIZE / 2, sy - 4 + bounce, s.hp, s.maxHp, 36 * sizeScale);
+          drawHPBar(ctx, sx + TILE_SIZE / 2, sy - 4, s.hp, s.maxHp, 36 * sizeScale);
         }
       });
 
       /* ── Wolves ─────────────────────────────────────── */
+
+      const skelSheet = spr("skeleton");
 
       wolvesRef.current.forEach((wolf, wolfId) => {
         if (!wolf.alive) return;
@@ -681,55 +761,57 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(wx - 2, wy - 2, TILE_SIZE + 4, TILE_SIZE + 4);
+          ctx.strokeRect(wx - 8, wy - 16, TILE_SIZE + 16, TILE_SIZE + 16);
         }
 
-        // Draw wolf sprite
+        // Animated skeleton sprite (used as "wolf" enemy)
         ctx.save();
         if (wolfHitFlash) ctx.globalAlpha = 0.5 + Math.sin(now * 0.05) * 0.5;
-        const wolfImg = spr("wolf");
-        if (wolfImg) {
-          ctx.drawImage(wolfImg, 0, 0, SPRITE_SZ, SPRITE_SZ, wx, wy, TILE_SIZE, TILE_SIZE);
+        if (skelSheet) {
+          const row = SK_WALK.down; // always face down for now
+          const frame = Math.floor(time / ANIM_SPEED) % P_WALK_FRAMES;
+          // Skeleton is 48x48 frames, draw slightly larger than a tile
+          ctx.drawImage(skelSheet, frame * PLAYER_FW, row * PLAYER_FH, PLAYER_FW, PLAYER_FH,
+            wx - 8, wy - 16, TILE_SIZE + 16, TILE_SIZE + 16);
         }
         ctx.restore();
 
         // Name
         const cx = wx + TILE_SIZE / 2;
         ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Wolf", cx + 1, wy - 5);
-        ctx.fillStyle = "#ff6b6b"; ctx.fillText("Wolf", cx, wy - 6);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText("Skeleton", cx + 1, wy - 21);
+        ctx.fillStyle = "#ff6b6b"; ctx.fillText("Skeleton", cx, wy - 22);
 
         // HP bar
         if (wolf.hp < wolf.maxHp || isWolfTargeted) {
-          drawHPBar(ctx, cx, wy - 12, wolf.hp, wolf.maxHp, 40);
+          drawHPBar(ctx, cx, wy - 28, wolf.hp, wolf.maxHp, 40);
         }
       });
 
       /* ── NPCs ────────────────────────────────────────── */
 
-      const NPC_SPRITES: Record<string, string> = {
-        "Elder Oak": "npc_sage", "Mira": "npc_elf", "Forge": "npc_dwarf",
-        "Pip": "npc_halfling", "Old Gil": "npc_elf",
-      };
-
+      // NPCs use the player spritesheet with idle animation
+      const npcSheet = spr("warrior"); // reuse warrior sheet for NPCs
       for (const npc of npcsRef.current) {
         const nx = npc.x * TILE_SIZE - camX;
         const ny = npc.y * TILE_SIZE - camY;
         if (nx < -80 || nx > w + 80 || ny < -80 || ny > h + 80) continue;
 
-        const npcImg = spr(NPC_SPRITES[npc.name] || "npc_elf");
-        if (npcImg) {
-          ctx.drawImage(npcImg, 0, 0, SPRITE_SZ, SPRITE_SZ, nx, ny, TILE_SIZE, TILE_SIZE);
+        if (npcSheet) {
+          const row = P_IDLE.down;
+          const frame = Math.floor(time / 200) % P_IDLE_FRAMES;
+          ctx.drawImage(npcSheet, frame * PLAYER_FW, row * PLAYER_FH, PLAYER_FW, PLAYER_FH,
+            nx - 8, ny - 16, TILE_SIZE + 16, TILE_SIZE + 16);
         }
 
         const cx = nx + TILE_SIZE / 2;
         ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(npc.name, cx + 1, ny - 5);
-        ctx.fillStyle = "#FFD700"; ctx.fillText(npc.name, cx, ny - 6);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(npc.name, cx + 1, ny - 21);
+        ctx.fillStyle = "#FFD700"; ctx.fillText(npc.name, cx, ny - 22);
 
         if (me) {
           const dist = Math.abs(Math.round(me.toX / TILE_SIZE) - npc.x) + Math.abs(Math.round(me.toY / TILE_SIZE) - npc.y);
-          if (dist <= 2) { ctx.font = "10px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillText("[E] Talk", cx, ny - 18); }
+          if (dist <= 2) { ctx.font = "10px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillText("[E] Talk", cx, ny - 34); }
         }
       }
 
@@ -746,42 +828,43 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           const pulse = 0.5 + Math.sin(time / 200) * 0.3;
           ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
           ctx.lineWidth = 3;
-          ctx.strokeRect(px - 2, py - 2, TILE_SIZE + 4, TILE_SIZE + 4);
+          ctx.strokeRect(px - 10, py - 18, TILE_SIZE + 20, TILE_SIZE + 18);
         }
 
-        // Draw player sprite
-        const spriteName = p.playerClass === "ranger" ? "ranger" : "warrior";
-        const playerImg = spr(spriteName);
-        if (playerImg) {
+        // Animated player sprite
+        const sheetName = p.playerClass === "ranger" ? "ranger" : "warrior";
+        const sheet = spr(sheetName);
+        if (sheet) {
           ctx.save();
           if (p.hp <= 0) ctx.globalAlpha = 0.4;
-          ctx.drawImage(playerImg, 0, 0, SPRITE_SZ, SPRITE_SZ, px, py, TILE_SIZE, TILE_SIZE);
+          const isMoving = p.moveStartTime > 0 || p.moving;
+          const dir = p.direction || "down";
+          const row = isMoving ? (P_WALK[dir] ?? P_WALK.down) : (P_IDLE[dir] ?? P_IDLE.down);
+          const maxFrames = isMoving ? P_WALK_FRAMES : P_IDLE_FRAMES;
+          const frame = Math.floor(time / ANIM_SPEED) % maxFrames;
+          // 48x48 source → draw slightly larger than tile
+          ctx.drawImage(sheet, frame * PLAYER_FW, row * PLAYER_FH, PLAYER_FW, PLAYER_FH,
+            px - 8, py - 16, TILE_SIZE + 16, TILE_SIZE + 16);
           ctx.restore();
         } else {
           ctx.beginPath(); ctx.arc(cx, py + TILE_SIZE / 2, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
         }
 
-        // Self indicator (subtle white border)
-        if (sid === sessionIdRef.current) {
-          ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1;
-          ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
-        }
-
         const classIcon = p.playerClass === "ranger" ? "🏹" : "⚔️";
         const nameStr = `${classIcon} ${p.name}`;
         ctx.font = "bold 11px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, cx + 1, py - 5);
-        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, cx, py - 6);
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, cx + 1, py - 21);
+        ctx.fillStyle = "#fff"; ctx.fillText(nameStr, cx, py - 22);
 
         // Level badge
         if (p.level > 1) {
           ctx.font = "bold 10px 'Segoe UI', sans-serif";
           ctx.fillStyle = "#FFD700";
-          ctx.fillText(`Lv.${p.level}`, cx, py - 16);
+          ctx.fillText(`Lv.${p.level}`, cx, py - 32);
         }
 
         // HP bar
-        drawHPBar(ctx, cx, py - 22, p.hp, p.maxHp, 40);
+        drawHPBar(ctx, cx, py - 38, p.hp, p.maxHp, 40);
 
         // Dead overlay
         if (p.hp <= 0) {
