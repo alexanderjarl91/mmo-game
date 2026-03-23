@@ -20,4 +20,11 @@ export class PlayerState extends Schema {
   @type("boolean") isHardcore: boolean = false;
   @type("number") gold: number = 0;
   @type([InventorySlot]) inventory = new ArraySchema<InventorySlot>();
+  // Equipment slots (item IDs, empty string = nothing equipped)
+  @type("string") equipWeapon: string = "";
+  @type("string") equipHelmet: string = "";
+  @type("string") equipChest: string = "";
+  @type("string") equipLegs: string = "";
+  @type("string") equipBoots: string = "";
+  @type("number") defense: number = 0; // total defense from equipment
 }

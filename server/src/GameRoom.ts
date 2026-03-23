@@ -5,7 +5,8 @@ import { SlimeState } from "./SlimeState";
 import { WolfState } from "./WolfState";
 import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
-import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE } from "./items";
+import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
+import type { EquipSlot } from "./items";
 
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
@@ -102,6 +103,77 @@ function countInInventory(player: PlayerState, itemId: string): number {
     if (s && s.itemId === itemId) count += s.quantity;
   }
   return count;
+}
+
+// Equipment helpers
+function getEquipSlotField(slot: EquipSlot): "equipWeapon" | "equipHelmet" | "equipChest" | "equipLegs" | "equipBoots" {
+  switch (slot) {
+    case "weapon": return "equipWeapon";
+    case "helmet": return "equipHelmet";
+    case "chest": return "equipChest";
+    case "legs": return "equipLegs";
+    case "boots": return "equipBoots";
+  }
+}
+
+function recalcEquipBonuses(player: PlayerState) {
+  const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+  const level = player.level;
+  let bonusAtk = 0, bonusDef = 0, bonusMaxHp = 0, bonusMaxMp = 0;
+  const slots = [player.equipWeapon, player.equipHelmet, player.equipChest, player.equipLegs, player.equipBoots];
+  for (const itemId of slots) {
+    if (!itemId) continue;
+    const item = ITEMS[itemId];
+    if (!item?.equipBonus) continue;
+    bonusAtk += item.equipBonus.atk || 0;
+    bonusDef += item.equipBonus.def || 0;
+    bonusMaxHp += item.equipBonus.maxHp || 0;
+    bonusMaxMp += item.equipBonus.maxMp || 0;
+  }
+  player.attack = cfg.attackBase + (level - 1) * 5 + bonusAtk;
+  player.defense = bonusDef;
+  const newMaxHp = cfg.hpBase + (level - 1) * 20 + bonusMaxHp;
+  const newMaxMp = cfg.mpBase + (level - 1) * 10 + bonusMaxMp;
+  // Don't let current HP/MP exceed new max
+  player.maxHp = newMaxHp;
+  player.maxMp = newMaxMp;
+  if (player.hp > player.maxHp) player.hp = player.maxHp;
+  if (player.mp > player.maxMp) player.mp = player.maxMp;
+}
+
+function equipItem(player: PlayerState, itemId: string): boolean {
+  const item = ITEMS[itemId];
+  if (!item || !item.equipSlot) return false;
+  const field = getEquipSlotField(item.equipSlot);
+  // Unequip current item first
+  const currentId = player[field] as string;
+  if (currentId) {
+    if (!addToInventory(player, currentId, 1)) return false; // inv full
+  }
+  // Remove new item from inventory
+  if (!removeFromInventory(player, itemId, 1)) {
+    // Put old item back if we already added it
+    if (currentId) removeFromInventory(player, currentId, 1);
+    return false;
+  }
+  player[field] = itemId;
+  recalcEquipBonuses(player);
+  return true;
+}
+
+function unequipItem(player: PlayerState, slot: EquipSlot): boolean {
+  const field = getEquipSlotField(slot);
+  const currentId = player[field] as string;
+  if (!currentId) return false;
+  if (!addToInventory(player, currentId, 1)) return false; // inv full
+  player[field] = "";
+  recalcEquipBonuses(player);
+  return true;
+}
+
+function applyDefense(rawDamage: number, defense: number): number {
+  // Defense reduces damage: dmg * 100 / (100 + defense)
+  return Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
 }
 
 // Class configs
@@ -584,7 +656,8 @@ export class GameRoom extends Room<GameState> {
           const last = wolfLastAttack.get(wolf.id) || 0;
           if (now - last >= WOLF_ATTACK_INTERVAL_MS) {
             wolfLastAttack.set(wolf.id, now);
-            const damage = WOLF_ATK + Math.floor(Math.random() * 8);
+            const rawDmg = WOLF_ATK + Math.floor(Math.random() * 8);
+            const damage = applyDefense(rawDmg, closest.defense);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", {
               targetId: closestSid,
@@ -639,7 +712,8 @@ export class GameRoom extends Room<GameState> {
             const last = slimeLastAttack.get(slimeId) || 0;
             if (now - last >= SLIME_ATTACK_INTERVAL_MS) {
               slimeLastAttack.set(slimeId, now);
-              const damage = SLIME_ATK + Math.floor(Math.random() * 6);
+              const rawDmg = SLIME_ATK + Math.floor(Math.random() * 6);
+              const damage = applyDefense(rawDmg, target.defense);
               target.hp = Math.max(0, target.hp - damage);
               this.broadcast("hit", {
                 targetId: slime.targetPlayerId,

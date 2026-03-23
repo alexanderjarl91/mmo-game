@@ -84,6 +84,8 @@ function xpForLevel(level: number): number {
 }
 
 interface Projectile { fromX: number; fromY: number; toX: number; toY: number; time: number; }
+interface LevelUpEffect { sessionId: string; level: number; time: number; }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
 
 interface Props { playerName: string; playerClass: string; isHardcore: boolean; }
 
@@ -126,6 +128,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const damageNumbersRef = useRef<DamageNumber[]>([]);
   const killFeedRef = useRef<KillFeed[]>([]);
   const projectilesRef = useRef<Projectile[]>([]);
+  const levelUpEffectsRef = useRef<LevelUpEffect[]>([]);
+  const particlesRef = useRef<Particle[]>([]);
 
   useEffect(() => { setIsMobile("ontouchstart" in window || navigator.maxTouchPoints > 0); }, []);
 
@@ -336,8 +340,32 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         if (killFeedRef.current.length > 5) killFeedRef.current.shift();
       });
 
-      room.onMessage("levelup", (data: { name: string; level: number }) => {
+      room.onMessage("levelup", (data: { name: string; level: number; sessionId?: string }) => {
         killFeedRef.current.push({ text: `⭐ ${data.name} reached level ${data.level}!`, time: performance.now() });
+        // Spawn level-up particle effect
+        const sid = data.sessionId || "";
+        if (sid) {
+          levelUpEffectsRef.current.push({ sessionId: sid, level: data.level, time: performance.now() });
+          // Spawn golden particles
+          const p = playersRef.current.get(sid);
+          if (p) {
+            const colors = ["#f1c40f", "#f39c12", "#e67e22", "#fff", "#ffd700"];
+            for (let i = 0; i < 30; i++) {
+              const angle = (Math.PI * 2 * i) / 30 + Math.random() * 0.3;
+              const speed = 1.5 + Math.random() * 3;
+              particlesRef.current.push({
+                x: p.displayX + TILE_SIZE / 2,
+                y: p.displayY + TILE_SIZE / 2 - 20,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed - 1,
+                life: 60 + Math.random() * 40,
+                maxLife: 60 + Math.random() * 40,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                size: 2 + Math.random() * 3,
+              });
+            }
+          }
+        }
       });
 
       room.onMessage("pvp_hit", (data: { targetId: string; attackerName: string; damage: number }) => {
@@ -762,6 +790,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       damageNumbersRef.current = damageNumbersRef.current.filter(d => now - d.time < DAMAGE_DURATION);
       killFeedRef.current = killFeedRef.current.filter(k => now - k.time < 5000);
       projectilesRef.current = projectilesRef.current.filter(p => now - p.time < 400);
+      levelUpEffectsRef.current = levelUpEffectsRef.current.filter(e => now - e.time < 2000);
+      // Update particles
+      particlesRef.current = particlesRef.current.filter(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--; return p.life > 0; });
       if (npcDialogueRef.current && now - npcDialogueRef.current.time > NPC_DIALOGUE_DURATION) npcDialogueRef.current = null;
 
       // Canvas
@@ -1122,6 +1153,43 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.textAlign = "center";
         ctx.fillStyle = dmg.color || "#e74c3c";
         ctx.fillText(`${dmg.prefix || "-"}${dmg.damage}`, dmg.x - camX, floatY);
+        ctx.restore();
+      }
+
+      /* ── Particles ─────────────────────────────────────── */
+      for (const part of particlesRef.current) {
+        const alpha = part.life / part.maxLife;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = part.color;
+        ctx.beginPath();
+        ctx.arc(part.x - camX, part.y - camY, part.size * alpha, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      /* ── Level-up effects ────────────────────────────── */
+      for (const lvl of levelUpEffectsRef.current) {
+        const p = playersRef.current.get(lvl.sessionId);
+        if (!p) continue;
+        const age = now - lvl.time;
+        const alpha = age > 1500 ? (2000 - age) / 500 : Math.min(age / 200, 1);
+        const px = p.displayX + TILE_SIZE / 2 - camX;
+        const py = p.displayY + TILE_SIZE / 2 - camY;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        // Glowing ring
+        const ringRadius = 20 + (age / 2000) * 30;
+        ctx.strokeStyle = "#f1c40f";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(px, py - 10, ringRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        // Level up text
+        ctx.font = "bold 16px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f1c40f";
+        ctx.fillText(`⭐ LEVEL ${lvl.level}!`, px, py - 70 - age / 50);
         ctx.restore();
       }
 
