@@ -12,7 +12,7 @@ export function getClient(): Client {
   return client;
 }
 
-export async function joinGame(name: string, playerClass: string): Promise<Room> {
+export async function joinGame(name: string, playerClass: string, isHardcore: boolean = false): Promise<Room> {
   const c = getClient();
   // Load saved character data
   let savedXp = 0;
@@ -26,7 +26,7 @@ export async function joinGame(name: string, playerClass: string): Promise<Room>
     }
   } catch {}
   try {
-    room = await c.joinOrCreate("game", { name, playerClass, savedXp });
+    room = await c.joinOrCreate("game", { name, playerClass, savedXp, isHardcore });
     return room;
   } catch (err: any) {
     console.error("Join failed:", err);

@@ -17,6 +17,7 @@ interface PlayerData {
   xp: number; level: number;
   playerClass: string;
   targetId: string;
+  isHardcore: boolean;
 }
 
 interface SlimeData {
@@ -73,9 +74,9 @@ function xpForLevel(level: number): number {
 
 interface Projectile { fromX: number; fromY: number; toX: number; toY: number; time: number; }
 
-interface Props { playerName: string; playerClass: string; }
+interface Props { playerName: string; playerClass: string; isHardcore: boolean; }
 
-export default function GameCanvas({ playerName, playerClass }: Props) {
+export default function GameCanvas({ playerName, playerClass, isHardcore }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const roomRef = useRef<Room | null>(null);
   const playersRef = useRef<Map<string, PlayerData>>(new Map());
@@ -87,7 +88,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState("");
-  const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string } | null>(null);
+  const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string; isHardcore: boolean } | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
   const warriorSpriteRef = useRef<HTMLImageElement | null>(null);
@@ -255,7 +256,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
   useEffect(() => {
     let cancelled = false;
 
-    joinGame(playerName, playerClass).then((room) => {
+    joinGame(playerName, playerClass, isHardcore).then((room) => {
       if (cancelled) { room.leave(); return; }
       roomRef.current = room;
       sessionIdRef.current = room.sessionId;
@@ -389,6 +390,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           xp: player.xp || 0, level: player.level || 1,
           playerClass: player.playerClass || "warrior",
           targetId: player.targetId || "",
+          isHardcore: player.isHardcore || false,
         };
         playersRef.current.set(sessionId, data);
 
@@ -410,6 +412,7 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
           p.xp = player.xp; p.level = player.level;
           p.playerClass = player.playerClass || "warrior";
           p.targetId = player.targetId || "";
+          p.isHardcore = player.isHardcore || false;
         });
       });
       room.state.players.onRemove((_: any, sid: string) => { playersRef.current.delete(sid); });
@@ -1160,12 +1163,13 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
 
       // Update React state for HUD overlay (throttled)
       if (me && Math.floor(time / 500) !== Math.floor((time - 16) / 500)) {
-        setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId });
+        setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId, isHardcore: me.isHardcore });
         // Save character to localStorage
         try {
           localStorage.setItem("mmo_character", JSON.stringify({
             name: me.name, playerClass: me.playerClass,
             level: me.level, xp: me.xp, savedAt: Date.now(),
+            isHardcore: me.isHardcore,
           }));
         } catch {}
       }
@@ -1197,23 +1201,45 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
       {myStats && myStats.hp <= 0 && (
         <div style={{
           position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-          background: "rgba(139,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center",
+          background: myStats.isHardcore ? "rgba(0,0,0,0.7)" : "rgba(139,0,0,0.4)",
+          display: "flex", alignItems: "center", justifyContent: "center",
           flexDirection: "column", zIndex: 15,
         }}>
-          <div style={{ fontSize: 48, marginBottom: 10 }}>💀</div>
-          <div style={{ color: "#fff", fontSize: 24, fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>YOU DIED</div>
-          <button
-            onClick={() => roomRef.current?.send("request_respawn")}
-            style={{
-              marginTop: 20, padding: "12px 36px", background: "#c0392b", color: "#fff",
-              border: "2px solid #e74c3c", borderRadius: 8, fontSize: 18, fontWeight: "bold",
-              cursor: "pointer", textShadow: "1px 1px 2px rgba(0,0,0,0.5)",
-            }}
-            onMouseOver={(e) => (e.currentTarget.style.background = "#e74c3c")}
-            onMouseOut={(e) => (e.currentTarget.style.background = "#c0392b")}
-          >
-            ⛪ Respawn at Temple
-          </button>
+          <div style={{ fontSize: 48, marginBottom: 10 }}>{myStats.isHardcore ? "☠️" : "💀"}</div>
+          <div style={{ color: myStats.isHardcore ? "#ff4444" : "#fff", fontSize: 24, fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>
+            {myStats.isHardcore ? "HARDCORE DEATH" : "YOU DIED"}
+          </div>
+          {myStats.isHardcore ? (
+            <>
+              <div style={{ color: "#ccc", fontSize: 14, marginTop: 8, textAlign: "center" }}>Your character has been permanently lost.</div>
+              <button
+                onClick={() => {
+                  localStorage.removeItem("mmo_character");
+                  window.location.reload();
+                }}
+                style={{
+                  marginTop: 20, padding: "12px 36px", background: "#333", color: "#fff",
+                  border: "2px solid #666", borderRadius: 8, fontSize: 18, fontWeight: "bold",
+                  cursor: "pointer",
+                }}
+              >
+                Create New Character
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => roomRef.current?.send("request_respawn")}
+              style={{
+                marginTop: 20, padding: "12px 36px", background: "#c0392b", color: "#fff",
+                border: "2px solid #e74c3c", borderRadius: 8, fontSize: 18, fontWeight: "bold",
+                cursor: "pointer", textShadow: "1px 1px 2px rgba(0,0,0,0.5)",
+              }}
+              onMouseOver={(e) => (e.currentTarget.style.background = "#e74c3c")}
+              onMouseOut={(e) => (e.currentTarget.style.background = "#c0392b")}
+            >
+              ⛪ Respawn at Temple
+            </button>
+          )}
         </div>
       )}
 

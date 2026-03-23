@@ -16,4 +16,5 @@ export class PlayerState extends Schema {
   @type("number") maxMp: number = 50;
   @type("string") playerClass: string = "warrior"; // warrior | ranger
   @type("string") targetId: string = ""; // current attack target (slime id or player session id)
+  @type("boolean") isHardcore: boolean = false;
 }

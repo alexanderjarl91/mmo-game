@@ -3,11 +3,11 @@ import LoginScreen from "./components/LoginScreen";
 import GameCanvas from "./components/GameCanvas";
 
 export default function App() {
-  const [player, setPlayer] = useState<{ name: string; playerClass: string } | null>(null);
+  const [player, setPlayer] = useState<{ name: string; playerClass: string; isHardcore: boolean } | null>(null);
 
   if (!player) {
-    return <LoginScreen onPlay={(name, playerClass) => setPlayer({ name, playerClass })} />;
+    return <LoginScreen onPlay={(name, playerClass, isHardcore) => setPlayer({ name, playerClass, isHardcore })} />;
   }
 
-  return <GameCanvas playerName={player.name} playerClass={player.playerClass} />;
+  return <GameCanvas playerName={player.name} playerClass={player.playerClass} isHardcore={player.isHardcore} />;
 }

@@ -790,6 +790,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("request_respawn", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp > 0) return; // only if dead
+      if (player.isHardcore) return; // hardcore characters can't respawn
       this.respawnPlayer(player);
     });
 
@@ -953,10 +954,11 @@ export class GameRoom extends Room<GameState> {
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
-  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number }) {
+  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean }) {
     const player = new PlayerState();
     const cls = (options.playerClass === "ranger") ? "ranger" : "warrior";
     const cfg = CLASS_CONFIG[cls];
+    player.isHardcore = !!options.isHardcore;
 
     // Restore saved progress
     const xp = Math.max(0, Math.min(options.savedXp || 0, 1000000)); // cap XP

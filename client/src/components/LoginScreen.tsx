@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 interface Props {
-  onPlay: (name: string, playerClass: string) => void;
+  onPlay: (name: string, playerClass: string, isHardcore: boolean) => void;
 }
 
 interface SavedCharacter {
@@ -10,6 +10,7 @@ interface SavedCharacter {
   level: number;
   xp: number;
   savedAt: number;
+  isHardcore?: boolean;
 }
 
 function getSavedCharacter(): SavedCharacter | null {
@@ -25,6 +26,7 @@ export default function LoginScreen({ onPlay }: Props) {
   const [name, setName] = useState("");
   const [playerClass, setPlayerClass] = useState<"warrior" | "ranger">("warrior");
   const [showNew, setShowNew] = useState(false);
+  const [isHardcore, setIsHardcore] = useState(false);
 
   useEffect(() => {
     const s = getSavedCharacter();
@@ -40,11 +42,11 @@ export default function LoginScreen({ onPlay }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (trimmed) onPlay(trimmed, playerClass);
+    if (trimmed) onPlay(trimmed, playerClass, isHardcore);
   };
 
   const handleContinue = () => {
-    if (saved) onPlay(saved.name, saved.playerClass);
+    if (saved) onPlay(saved.name, saved.playerClass, saved.isHardcore || false);
   };
 
   const handleNewCharacter = () => {
@@ -107,6 +109,7 @@ export default function LoginScreen({ onPlay }: Props) {
             <div style={{ fontSize: 22, fontWeight: "bold", marginBottom: 4 }}>{saved.name}</div>
             <div style={{ fontSize: 14, color: "#aaa", marginBottom: 4 }}>
               {classInfo[saved.playerClass as keyof typeof classInfo]?.name || saved.playerClass} — Level {saved.level}
+              {saved.isHardcore && <span style={{ color: "#ff4444", marginLeft: 8 }}>☠️ HC</span>}
             </div>
             <div style={{ fontSize: 12, color: "#888", fontFamily: "monospace" }}>
               XP: {saved.xp}
@@ -180,6 +183,37 @@ export default function LoginScreen({ onPlay }: Props) {
                 </div>
               );
             })}
+          </div>
+
+          {/* Game mode toggle */}
+          <div
+            onClick={() => setIsHardcore(!isHardcore)}
+            style={{
+              display: "flex", alignItems: "center", gap: 10, marginBottom: 20,
+              cursor: "pointer", userSelect: "none",
+              padding: "8px 16px", borderRadius: 8,
+              border: `2px solid ${isHardcore ? "#ff4444" : "rgba(255,255,255,0.15)"}`,
+              background: isHardcore ? "rgba(255,68,68,0.15)" : "rgba(255,255,255,0.05)",
+              transition: "all 0.2s",
+            }}
+          >
+            <div style={{
+              width: 20, height: 20, borderRadius: 4,
+              border: `2px solid ${isHardcore ? "#ff4444" : "#666"}`,
+              background: isHardcore ? "#ff4444" : "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 14, color: "#fff",
+            }}>
+              {isHardcore ? "✓" : ""}
+            </div>
+            <div>
+              <span style={{ fontWeight: "bold", color: isHardcore ? "#ff4444" : "#fff" }}>
+                ☠️ Hardcore Mode
+              </span>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                Death is permanent. Character deleted on death.
+              </div>
+            </div>
           </div>
 
           <form onSubmit={handleSubmit} style={{ display: "flex", gap: 12 }}>
