@@ -232,8 +232,7 @@ export class GameRoom extends Room<GameState> {
     if (slime && slime.alive) {
       const d = dist(px, py, slime.x, slime.y);
       if (d > cfg.range) {
-        // Out of range — clear target for warrior, keep for ranger
-        if (player.playerClass === "warrior") player.targetId = "";
+        // Out of range — keep target, just don't attack yet
         return;
       }
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
@@ -303,7 +302,6 @@ export class GameRoom extends Room<GameState> {
     if (wolf && wolf.alive) {
       const d = dist(px, py, wolf.x, wolf.y);
       if (d > cfg.range) {
-        if (player.playerClass === "warrior") player.targetId = "";
         return;
       }
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
@@ -358,7 +356,6 @@ export class GameRoom extends Room<GameState> {
     if (target && target.hp > 0) {
       const d = dist(px, py, target.x, target.y);
       if (d > cfg.range) {
-        if (player.playerClass === "warrior") player.targetId = "";
         return;
       }
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
