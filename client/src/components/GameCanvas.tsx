@@ -1188,11 +1188,22 @@ export default function GameCanvas({ playerName, playerClass }: Props) {
         <div style={{
           position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
           background: "rgba(139,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center",
-          flexDirection: "column", zIndex: 15, pointerEvents: "none",
+          flexDirection: "column", zIndex: 15,
         }}>
           <div style={{ fontSize: 48, marginBottom: 10 }}>💀</div>
           <div style={{ color: "#fff", fontSize: 24, fontWeight: "bold", textShadow: "2px 2px 4px rgba(0,0,0,0.8)" }}>YOU DIED</div>
-          <div style={{ color: "#ccc", fontSize: 14, marginTop: 8 }}>Respawning...</div>
+          <button
+            onClick={() => roomRef.current?.send("request_respawn")}
+            style={{
+              marginTop: 20, padding: "12px 36px", background: "#c0392b", color: "#fff",
+              border: "2px solid #e74c3c", borderRadius: 8, fontSize: 18, fontWeight: "bold",
+              cursor: "pointer", textShadow: "1px 1px 2px rgba(0,0,0,0.5)",
+            }}
+            onMouseOver={(e) => (e.currentTarget.style.background = "#e74c3c")}
+            onMouseOut={(e) => (e.currentTarget.style.background = "#c0392b")}
+          >
+            ⛪ Respawn at Temple
+          </button>
         </div>
       )}
 

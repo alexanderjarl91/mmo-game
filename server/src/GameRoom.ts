@@ -24,7 +24,7 @@ function levelFromXp(xp: number): number {
 }
 const PLAYER_RESPAWN_MS = 5000;
 const SPAWN_TILE_X = 36;
-const SPAWN_TILE_Y = 37;
+const SPAWN_TILE_Y = 43; // Inside the temple
 const AUTO_ATTACK_MS = 1200; // auto-attack interval
 const MANA_REGEN_MS = 2000; // regen 1 mp every 2s
 const MANA_REGEN_AMT = 2;   // mp per tick
@@ -395,7 +395,6 @@ export class GameRoom extends Room<GameState> {
           targetId: player.targetId, targetName: target.name, xp: xpGain,
         });
 
-        this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS);
       }
       return;
     }
@@ -519,7 +518,6 @@ export class GameRoom extends Room<GameState> {
             if (closest.hp <= 0) {
               wolf.targetPlayerId = "";
               this.broadcast("kill", { targetId: closestSid, killerId: wolf.id, killerName: "Wolf", xp: 0 });
-              this.clock.setTimeout(() => { this.respawnPlayer(closest!); }, PLAYER_RESPAWN_MS);
             }
           }
           return;
@@ -574,7 +572,6 @@ export class GameRoom extends Room<GameState> {
               if (target.hp <= 0) {
                 slime.targetPlayerId = "";
                 this.broadcast("kill", { targetId: slime.targetPlayerId, killerId: slimeId, killerName: "Slime", xp: 0 });
-                this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS);
               }
             }
             return; // don't move while attacking
@@ -774,6 +771,13 @@ export class GameRoom extends Room<GameState> {
     });
 
     // ── Heal spell ──
+    // ── Respawn (player clicks button after dying) ──
+    this.onMessage("request_respawn", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp > 0) return; // only if dead
+      this.respawnPlayer(player);
+    });
+
     this.onMessage("heal", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
@@ -853,7 +857,7 @@ export class GameRoom extends Room<GameState> {
         target.hp = Math.max(0, target.hp - damage);
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: target.x + TILE_SIZE / 2, toY: target.y });
         this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage });
-        if (target.hp <= 0) { player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS); }
+        if (target.hp <= 0) { player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
       }
     });
 
@@ -918,7 +922,7 @@ export class GameRoom extends Room<GameState> {
         target.hp = Math.max(0, target.hp - damage);
         this.broadcast("pvp_hit", { targetId: sid, attackerName: player.name, damage });
         hitCount++;
-        if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.clock.setTimeout(() => { this.respawnPlayer(target); }, PLAYER_RESPAWN_MS); }
+        if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
       });
 
       // Check for level up
