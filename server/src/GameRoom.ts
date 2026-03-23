@@ -678,11 +678,14 @@ export class GameRoom extends Room<GameState> {
         return;
       }
 
-      let slimeBlocking = false;
+      let monsterBlocking = false;
       this.state.slimes.forEach((slime) => {
-        if (slime.alive && slime.x === newX && slime.y === newY) slimeBlocking = true;
+        if (slime.alive && slime.x === newX && slime.y === newY) monsterBlocking = true;
       });
-      if (slimeBlocking) {
+      this.state.wolves.forEach((wolf) => {
+        if (wolf.alive && wolf.x === newX && wolf.y === newY) monsterBlocking = true;
+      });
+      if (monsterBlocking) {
         lastMoveTime.set(client.sessionId, now);
         return;
       }
