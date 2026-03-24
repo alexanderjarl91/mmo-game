@@ -184,6 +184,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [questLogOpen, setQuestLogOpen] = useState(false);
   const [questDialogOpen, setQuestDialogOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const [questDialogData, setQuestDialogData] = useState<{ npcId: string; npcName: string; available: any[]; turnIn: any[] } | null>(null);
   const questTrackerRef = useRef<Array<{ questId: string; name: string; icon: string; progress: number; required: number; completed: boolean; killTarget: string }>>([]);
   const questNotifRef = useRef<Array<{ text: string; time: number; color: string }>>([]);
@@ -1401,8 +1403,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (e.key === "Escape" && questLogOpen) { setQuestLogOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && questDialogOpen) { setQuestDialogOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && chatOpen) { setChatOpen(false); setChatText(""); canvasRef.current?.focus(); return; }
+      if (e.key === "Escape" && controlsOpen) { setControlsOpen(false); canvasRef.current?.focus(); return; }
+      if (e.key === "Escape") { setMenuOpen(prev => !prev); canvasRef.current?.focus(); return; }
       if (chatOpen) return;
-      if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
       if (e.key === "c" || e.key === "C") { setCharacterSheetOpen(prev => !prev); return; }
       if (e.key === "q" || e.key === "Q") { setQuestLogOpen(prev => !prev); return; }
@@ -1514,7 +1517,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen, characterSheetOpen, questLogOpen, questDialogOpen]);
+  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen, characterSheetOpen, questLogOpen, questDialogOpen, menuOpen, controlsOpen]);
 
   const handleDpad = (dx: number, dy: number, pressed: boolean) => {
     if (pressed) dpadRef.current = { dx, dy };
@@ -3956,6 +3959,195 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           </div>
         );
       })()}
+
+      {/* Menu Button (bottom-right corner, always visible) */}
+      <div
+        style={{
+          position: "absolute", bottom: isMobile ? 180 : 16, right: 16,
+          width: 44, height: 44, borderRadius: 10,
+          background: menuOpen ? "rgba(139,92,246,0.7)" : "rgba(0,0,0,0.6)",
+          border: menuOpen ? "2px solid #a78bfa" : "2px solid rgba(255,255,255,0.25)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer", zIndex: 20, fontSize: 22, color: "#fff",
+          userSelect: "none", transition: "background 0.15s, border 0.15s",
+        }}
+        onClick={(e) => { e.stopPropagation(); setMenuOpen(prev => !prev); }}
+        onTouchStart={(e) => { e.preventDefault(); setMenuOpen(prev => !prev); }}
+      >
+        ☰
+      </div>
+
+      {/* Game Menu Panel */}
+      {menuOpen && (
+        <div style={{
+          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 30,
+        }} onClick={() => setMenuOpen(false)}>
+          <div style={{
+            background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+            border: "2px solid #8b5cf6", borderRadius: 12, padding: 24,
+            minWidth: 280, maxWidth: 360,
+          }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: "#c4b5fd", margin: "0 0 18px 0", fontSize: 20, textAlign: "center" }}>☰ Game Menu</h2>
+
+            {/* Inventory */}
+            <button onClick={() => { setMenuOpen(false); setInventoryOpen(true); }} style={{
+              display: "flex", alignItems: "center", gap: 12, width: "100%",
+              padding: "12px 16px", marginBottom: 8, borderRadius: 8,
+              background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.3)",
+              color: "#fff", cursor: "pointer", fontSize: 15, fontWeight: "bold",
+              transition: "background 0.15s",
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = "rgba(139,92,246,0.25)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "rgba(139,92,246,0.12)"}
+            >
+              <span style={{ fontSize: 20 }}>🎒</span> Inventory
+              <span style={{ marginLeft: "auto", color: "#888", fontSize: 11 }}>I</span>
+            </button>
+
+            {/* Character Sheet */}
+            <button onClick={() => { setMenuOpen(false); setCharacterSheetOpen(true); }} style={{
+              display: "flex", alignItems: "center", gap: 12, width: "100%",
+              padding: "12px 16px", marginBottom: 8, borderRadius: 8,
+              background: "rgba(230,126,34,0.12)", border: "1px solid rgba(230,126,34,0.3)",
+              color: "#fff", cursor: "pointer", fontSize: 15, fontWeight: "bold",
+              transition: "background 0.15s",
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = "rgba(230,126,34,0.25)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "rgba(230,126,34,0.12)"}
+            >
+              <span style={{ fontSize: 20 }}>📋</span> Character Sheet
+              <span style={{ marginLeft: "auto", color: "#888", fontSize: 11 }}>C</span>
+            </button>
+
+            {/* Controls */}
+            <button onClick={() => { setMenuOpen(false); setControlsOpen(true); }} style={{
+              display: "flex", alignItems: "center", gap: 12, width: "100%",
+              padding: "12px 16px", marginBottom: 8, borderRadius: 8,
+              background: "rgba(52,152,219,0.12)", border: "1px solid rgba(52,152,219,0.3)",
+              color: "#fff", cursor: "pointer", fontSize: 15, fontWeight: "bold",
+              transition: "background 0.15s",
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = "rgba(52,152,219,0.25)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "rgba(52,152,219,0.12)"}
+            >
+              <span style={{ fontSize: 20 }}>🎮</span> Controls
+            </button>
+
+            {/* Settings (disabled) */}
+            <button disabled style={{
+              display: "flex", alignItems: "center", gap: 12, width: "100%",
+              padding: "12px 16px", marginBottom: 8, borderRadius: 8,
+              background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)",
+              color: "#555", cursor: "not-allowed", fontSize: 15, fontWeight: "bold",
+              opacity: 0.5,
+            }}>
+              <span style={{ fontSize: 20 }}>⚙️</span> Settings
+              <span style={{ marginLeft: "auto", color: "#444", fontSize: 10 }}>Coming Soon</span>
+            </button>
+
+            <button onClick={() => setMenuOpen(false)} style={{
+              marginTop: 10, width: "100%", padding: "8px", borderRadius: 6,
+              border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+              color: "#94a3b8", cursor: "pointer", fontSize: 12,
+            }}>Close (Esc)</button>
+          </div>
+        </div>
+      )}
+
+      {/* Controls Panel */}
+      {controlsOpen && (
+        <div style={{
+          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 30,
+        }} onClick={() => setControlsOpen(false)}>
+          <div style={{
+            background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+            border: "2px solid #3498db", borderRadius: 12, padding: 20,
+            minWidth: 340, maxWidth: 440, maxHeight: "80vh", overflowY: "auto",
+          }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: "#7ec8e3", margin: "0 0 14px 0", fontSize: 18 }}>🎮 Controls</h2>
+
+            {/* Movement */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: "#f39c12", fontSize: 11, fontWeight: "bold", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Movement</div>
+              {[
+                ["W / ↑", "Move Up"],
+                ["A / ←", "Move Left"],
+                ["S / ↓", "Move Down"],
+                ["D / →", "Move Right"],
+              ].map(([key, desc]) => (
+                <div key={key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+                  <span style={{ color: "#fff", fontSize: 12 }}>{desc}</span>
+                  <span style={{ color: "#7ec8e3", fontSize: 12, fontFamily: "monospace", background: "rgba(255,255,255,0.08)", padding: "1px 8px", borderRadius: 4 }}>{key}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Combat */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: "#e74c3c", fontSize: 11, fontWeight: "bold", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Combat</div>
+              {[
+                ["Click", "Target / Move to creature"],
+                ["X", "Attack nearest adjacent creature"],
+                ["1", "Heal (costs MP)"],
+                ["2", "Power Shot / Cleave (costs MP)"],
+                ["3", "Frost Arrow / Shield Wall"],
+                ["4", "Rain of Arrows / War Cry"],
+                ["5", "Use Health Potion"],
+                ["6", "Use Mana Potion"],
+              ].map(([key, desc]) => (
+                <div key={key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+                  <span style={{ color: "#fff", fontSize: 12 }}>{desc}</span>
+                  <span style={{ color: "#7ec8e3", fontSize: 12, fontFamily: "monospace", background: "rgba(255,255,255,0.08)", padding: "1px 8px", borderRadius: 4 }}>{key}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Interaction */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: "#2ecc71", fontSize: 11, fontWeight: "bold", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Interaction</div>
+              {[
+                ["E", "Talk to nearby NPC / Open Shop"],
+                ["Z", "Vacuum loot (pick up nearby items)"],
+                ["F", "Fish (near water)"],
+                ["Click item", "Pick up / Walk to dropped item"],
+              ].map(([key, desc]) => (
+                <div key={key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+                  <span style={{ color: "#fff", fontSize: 12 }}>{desc}</span>
+                  <span style={{ color: "#7ec8e3", fontSize: 12, fontFamily: "monospace", background: "rgba(255,255,255,0.08)", padding: "1px 8px", borderRadius: 4 }}>{key}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* UI */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: "#8b5cf6", fontSize: 11, fontWeight: "bold", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Interface</div>
+              {[
+                ["I", "Toggle Inventory"],
+                ["C", "Toggle Character Sheet"],
+                ["Q", "Toggle Quest Log"],
+                ["M", "Toggle Sound Mute"],
+                ["Enter", "Open / Send Chat"],
+                ["Esc", "Close panels / Open Menu"],
+              ].map(([key, desc]) => (
+                <div key={key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+                  <span style={{ color: "#fff", fontSize: 12 }}>{desc}</span>
+                  <span style={{ color: "#7ec8e3", fontSize: 12, fontFamily: "monospace", background: "rgba(255,255,255,0.08)", padding: "1px 8px", borderRadius: 4 }}>{key}</span>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => setControlsOpen(false)} style={{
+              marginTop: 4, width: "100%", padding: "8px", borderRadius: 6,
+              border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+              color: "#94a3b8", cursor: "pointer", fontSize: 12,
+            }}>Close (Esc)</button>
+          </div>
+        </div>
+      )}
 
       {/* NPC Quest Dialog */}
       {questDialogOpen && questDialogData && (

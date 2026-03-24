@@ -9,6 +9,19 @@
 
 ## Features Added
 
+### 24. ☰ Game Menu Button + Panel
+- Added a **menu button** (☰) in the bottom-right corner, always visible on desktop and mobile
+- Clicking the button or pressing **Escape** toggles the game menu open/closed
+- Menu options:
+  - **🎒 Inventory** — opens inventory panel (same as I key)
+  - **📋 Character Sheet** — opens character sheet (same as C key)
+  - **🎮 Controls** — shows a comprehensive list of all keybindings organized by category (Movement, Combat, Interaction, Interface)
+  - **⚙️ Settings** — shown but greyed out / disabled (coming soon)
+- Escape priority: closes open panels first (inventory, character sheet, shop, quest log, etc.), then toggles the menu
+- Controls panel lists: WASD/arrows, click-to-target, X attack adjacent, Z vacuum loot, E talk to NPC, F fishing, 1-6 abilities/potions, I/C/Q/M/Enter/Esc shortcuts
+- Styled consistently with existing game panels (gradient backgrounds, colored borders)
+- Mobile-friendly: button positioned above mobile controls; works with touch
+
 ### 23. 🖱️ Click-to-Loot Auto-Walk
 - Click any dropped item on the ground, even if far away
 - Character automatically walks toward the item and picks it up on arrival
