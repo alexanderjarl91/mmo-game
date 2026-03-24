@@ -422,6 +422,8 @@ export class GameRoom extends Room<GameState> {
     player.direction = "down";
     player.moving = false;
     player.targetId = "";
+    player.statusEffect = "";
+    player.statusEffectEnd = 0;
   }
 
   // Perform one attack from player against their target
@@ -1082,8 +1084,14 @@ export class GameRoom extends Room<GameState> {
             const damage = applyDefense(rawDmg, closest.defense);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id });
+            // Skeletons apply burn
+            if (Math.random() < BURN_CHANCE) {
+              applyStatusEffect(closest, "burn", BURN_DURATION_MS);
+              this.broadcast("status_applied", { sessionId: closestSid, effect: "burn" });
+            }
             if (closest.hp <= 0) {
               skeleton.targetPlayerId = "";
+              closest.statusEffect = ""; closest.statusEffectEnd = 0;
               this.broadcast("kill", { targetId: closestSid, killerId: skeleton.id, killerName: "Skeleton", xp: 0 });
             }
           }

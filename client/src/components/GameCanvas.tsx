@@ -28,6 +28,8 @@ interface PlayerData {
   equipLegs: string;
   equipBoots: string;
   defense: number;
+  statusEffect: string;
+  statusEffectEnd: number;
 }
 
 interface SlimeData {
@@ -360,7 +362,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: slime.displayY,
             damage: data.damage,
             time: performance.now(),
+            color: slime.color,
           });
+          for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: slime.displayX + TILE_SIZE / 2, y: slime.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2, life: 15 + Math.random() * 10, maxLife: 25, color: slime.color, size: 2 }); }
         }
         const wolf = wolvesRef.current.get(data.targetId);
         if (wolf) {
@@ -370,19 +374,25 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: wolf.displayY,
             damage: data.damage,
             time: performance.now(),
+            color: "#ff6b6b",
           });
+          for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: wolf.displayX + TILE_SIZE / 2, y: wolf.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#cc3333", size: 2.5 }); }
         }
         // Goblin hit
         const goblin = goblinsRef.current.get(data.targetId);
         if (goblin) {
           goblin.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now() });
+          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now(), color: "#7dcea0" });
+          // Hit particles
+          for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#4a8c3f", size: 2 }); }
         }
         // Skeleton hit
         const skel = skeletonsRef.current.get(data.targetId);
         if (skel) {
           skel.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now() });
+          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: "#bdc3c7" });
+          // Bone fragment particles
+          for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2.5, life: 15 + Math.random() * 10, maxLife: 25, color: "#ecf0f1", size: 1.5 }); }
         }
         // Player hit (by wolf or other mob)
         const player = playersRef.current.get(data.targetId);
@@ -504,6 +514,28 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         sfxCleave();
       });
 
+      room.onMessage("status_applied", (data: { sessionId: string; effect: string }) => {
+        const now = performance.now();
+        const p = playersRef.current.get(data.sessionId);
+        if (!p) return;
+        const prefix = data.effect === "poison" ? "☠️ Poisoned!" : "🔥 Burning!";
+        const color = data.effect === "poison" ? "#00ff00" : "#ff6600";
+        damageNumbersRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY - 10, damage: 0, time: now, color, prefix });
+        // Spawn status particles
+        for (let i = 0; i < 8; i++) {
+          particlesRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY + TILE_SIZE / 2, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2 - 1, life: 800, maxLife: 800, color, size: 3 });
+        }
+      });
+
+      room.onMessage("status_tick", (data: { sessionId: string; effect: string; damage: number }) => {
+        const now = performance.now();
+        const p = playersRef.current.get(data.sessionId);
+        if (!p) return;
+        const color = data.effect === "poison" ? "#00ff00" : "#ff6600";
+        const prefix = data.effect === "poison" ? "☠️" : "🔥";
+        damageNumbersRef.current.push({ x: p.displayX + TILE_SIZE / 2 + (Math.random() - 0.5) * 20, y: p.displayY, damage: data.damage, time: now, color, prefix });
+      });
+
       room.onMessage("loot_received", (data: { items: string[] }) => {
         const now = performance.now();
         for (const text of data.items) {
@@ -539,6 +571,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           equipLegs: player.equipLegs || "",
           equipBoots: player.equipBoots || "",
           defense: player.defense || 0,
+          statusEffect: player.statusEffect || "",
+          statusEffectEnd: player.statusEffectEnd || 0,
         };
         // Sync inventory
         if (player.inventory) {
@@ -584,6 +618,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.equipLegs = player.equipLegs || "";
           p.equipBoots = player.equipBoots || "";
           p.defense = player.defense || 0;
+          p.statusEffect = player.statusEffect || "";
+          p.statusEffectEnd = player.statusEffectEnd || 0;
           // Track death moment
           if (player.hp <= 0 && p.deathTime === 0) {
             p.deathTime = performance.now();
@@ -1383,6 +1419,33 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.beginPath(); ctx.arc(px, py, 20, 0, Math.PI * 2); ctx.fillStyle = p.color; ctx.fill();
         }
 
+        // Status effect visual overlay
+        if (p.statusEffect) {
+          ctx.save();
+          if (p.statusEffect === "poison") {
+            // Green pulsing aura
+            const pulse = 0.15 + Math.sin(time / 300) * 0.1;
+            ctx.globalAlpha = pulse;
+            ctx.fillStyle = "#00ff00";
+            ctx.beginPath(); ctx.arc(px, py - 5, 28, 0, Math.PI * 2); ctx.fill();
+            // Poison drip particles
+            if (Math.random() < 0.15) {
+              particlesRef.current.push({ x: px + (Math.random() - 0.5) * 30, y: py - 10, vx: 0, vy: 1.5, life: 600, maxLife: 600, color: "#00cc00", size: 2 });
+            }
+          } else if (p.statusEffect === "burn") {
+            // Orange/red flickering aura
+            const pulse = 0.15 + Math.sin(time / 150) * 0.12;
+            ctx.globalAlpha = pulse;
+            ctx.fillStyle = "#ff4400";
+            ctx.beginPath(); ctx.arc(px, py - 5, 28, 0, Math.PI * 2); ctx.fill();
+            // Fire particles rising
+            if (Math.random() < 0.2) {
+              particlesRef.current.push({ x: px + (Math.random() - 0.5) * 24, y: py, vx: (Math.random() - 0.5) * 1, vy: -2 - Math.random(), life: 500, maxLife: 500, color: Math.random() > 0.5 ? "#ff6600" : "#ffcc00", size: 3 });
+            }
+          }
+          ctx.restore();
+        }
+
         // Name above HP bar
         const nameStr = p.level > 1 ? `${p.name} [${p.level}]` : p.name;
         ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
@@ -1391,6 +1454,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
         // HP bar below name
         drawHPBar(ctx, px, py - 46, p.hp, p.maxHp, 40);
+
+        // Status effect icon
+        if (p.statusEffect) {
+          ctx.font = "12px serif"; ctx.textAlign = "left";
+          ctx.fillText(p.statusEffect === "poison" ? "☠️" : "🔥", px + 24, py - 43);
+        }
 
         // MP bar (only for local player)
         if (sid === sessionIdRef.current) {
