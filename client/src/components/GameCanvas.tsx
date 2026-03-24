@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { joinGame, sendMove, sendSetTarget, sendClearTarget } from "../lib/network";
+import { sfxHit, sfxPlayerHit, sfxKill, sfxLevelUp, sfxHeal, sfxLoot, sfxDeath, sfxArrow, sfxCleave, sfxChat, sfxEquip, toggleMute, isMuted } from "../lib/sound";
 import type { Room } from "colyseus.js";
 
 /* ── Types ─────────────────────────────────────────── */
@@ -150,6 +151,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const lastPotionUse = useRef(0);
   const [chatText, setChatText] = useState("");
+  const [soundMuted, setSoundMuted] = useState(false);
   const [myStats, setMyStats] = useState<{ hp: number; maxHp: number; xp: number; level: number; playerClass: string; targetId: string; isHardcore: boolean; gold: number } | null>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
@@ -337,6 +339,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       room.onMessage("chat", (data: ChatBubble) => {
         chatBubblesRef.current.push({ ...data, time: performance.now() });
         if (chatBubblesRef.current.length > 20) chatBubblesRef.current.shift();
+        sfxChat();
       });
 
       room.onMessage("emote", (data: EmoteBubble) => {
@@ -391,6 +394,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             time: performance.now(),
           });
         }
+        // Sound: hit on a monster = sfxHit, hit on local player = sfxPlayerHit
+        if (data.targetId === sessionIdRef.current) sfxPlayerHit();
+        else if (slime || wolf || goblin || skel) sfxHit();
       });
 
       room.onMessage("kill", (data: { killerName: string; xp: number; targetId?: string }) => {
@@ -398,10 +404,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const monsterName = tid.startsWith("wolf_") ? "wolf" : tid.startsWith("goblin_") ? "goblin" : tid.startsWith("skeleton_") ? "skeleton" : "slime";
         killFeedRef.current.push({ text: `${data.killerName} slayed a ${monsterName}! (+${data.xp} XP)`, time: performance.now() });
         if (killFeedRef.current.length > 5) killFeedRef.current.shift();
+        sfxKill();
       });
 
       room.onMessage("levelup", (data: { name: string; level: number; sessionId?: string }) => {
         killFeedRef.current.push({ text: `⭐ ${data.name} reached level ${data.level}!`, time: performance.now() });
+        sfxLevelUp();
         // Spawn level-up particle effect
         const sid = data.sessionId || "";
         if (sid) {
@@ -438,14 +446,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             time: performance.now(),
           });
         }
+        if (data.targetId === sessionIdRef.current) sfxPlayerHit();
+        else sfxHit();
       });
 
       room.onMessage("pvp_kill", (data: { killerName: string; targetName: string; xp: number }) => {
         killFeedRef.current.push({ text: `☠️ ${data.killerName} killed ${data.targetName}! (+${data.xp} XP)`, time: performance.now() });
+        sfxKill();
       });
 
       room.onMessage("projectile", (data: { fromX: number; fromY: number; toX: number; toY: number }) => {
         projectilesRef.current.push({ ...data, time: performance.now() });
+        sfxArrow();
       });
 
       room.onMessage("heal_effect", (data: { sessionId: string; amount: number }) => {
@@ -460,6 +472,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             prefix: "+",
           });
         }
+        if (data.sessionId === sessionIdRef.current) sfxHeal();
       });
 
       room.onMessage("mana_effect", (data: { sessionId: string; amount: number }) => {
@@ -488,6 +501,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             prefix: "⚔️ ",
           });
         }
+        sfxCleave();
       });
 
       room.onMessage("loot_received", (data: { items: string[] }) => {
@@ -496,6 +510,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           lootNotifRef.current.push({ text, time: now });
         }
         if (lootNotifRef.current.length > 5) lootNotifRef.current.splice(0, lootNotifRef.current.length - 5);
+        sfxLoot();
       });
 
       // Players
@@ -570,7 +585,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.equipBoots = player.equipBoots || "";
           p.defense = player.defense || 0;
           // Track death moment
-          if (player.hp <= 0 && p.deathTime === 0) p.deathTime = performance.now();
+          if (player.hp <= 0 && p.deathTime === 0) {
+            p.deathTime = performance.now();
+            if (sid === sessionIdRef.current) sfxDeath();
+          }
           if (player.hp > 0) p.deathTime = 0;
           // Re-sync inventory
           p.inventory = [];
@@ -830,6 +848,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
+      if (e.key === "m" || e.key === "M") { setSoundMuted(toggleMute()); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
       if (e.key === "2") {
@@ -2021,7 +2040,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                       cursor: equipped ? "pointer" : "default", minHeight: SLOT_PX,
                     }}
                     title={equipped ? `${equipped.name} — click to unequip` : es.label}
-                    onClick={() => { if (equipped) roomRef.current?.send("unequip_item", { slot: es.slot }); }}
+                    onClick={() => { if (equipped) { roomRef.current?.send("unequip_item", { slot: es.slot }); sfxEquip(); } }}
                     >
                       <span style={{ fontSize: 20 }}>{equipped ? equipped.icon : es.icon}</span>
                       <span style={{ fontSize: 8, color: equipped ? "#2ecc71" : "#555", marginTop: 2 }}>{es.label}</span>
@@ -2056,6 +2075,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                       if (slot && item) {
                         if (item.equipSlot) {
                           roomRef.current?.send("equip_item", { itemId: slot.itemId });
+                          sfxEquip();
                         } else if (item.effect) {
                           roomRef.current?.send("use_potion", { itemId: slot.itemId });
                         }
