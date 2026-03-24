@@ -44,6 +44,15 @@ const HEAL_AMOUNT = 30;     // hp restored
 const POWER_SHOT_COST = 30; // ranger extra shot
 const CLEAVE_COST = 30;     // warrior AoE attack
 const POTION_COOLDOWN_MS = 2000;
+// Status effect config
+const POISON_DURATION_MS = 8000; // 8 seconds
+const POISON_TICK_MS = 2000;     // tick every 2s
+const POISON_DAMAGE = 5;         // damage per tick
+const POISON_CHANCE = 0.25;      // 25% chance on goblin hit
+const BURN_DURATION_MS = 6000;   // 6 seconds
+const BURN_TICK_MS = 1500;       // tick every 1.5s
+const BURN_DAMAGE = 8;           // damage per tick
+const BURN_CHANCE = 0.30;        // 30% chance on skeleton hit
 const SLIME_GOLD_MIN = 5; const SLIME_GOLD_MAX = 15;
 const WOLF_GOLD_MIN = 20; const WOLF_GOLD_MAX = 40;
 const PVP_GOLD_MIN = 10; const PVP_GOLD_MAX = 30;
@@ -171,6 +180,11 @@ function unequipItem(player: PlayerState, slot: EquipSlot): boolean {
   player[field] = "";
   recalcEquipBonuses(player);
   return true;
+}
+
+function applyStatusEffect(player: PlayerState, effect: "poison" | "burn", durationMs: number) {
+  player.statusEffect = effect;
+  player.statusEffectEnd = Date.now() + durationMs;
 }
 
 function applyDefense(rawDamage: number, defense: number): number {
@@ -995,8 +1009,14 @@ export class GameRoom extends Room<GameState> {
             const damage = applyDefense(rawDmg, closest.defense);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id });
+            // Goblins apply poison
+            if (Math.random() < POISON_CHANCE) {
+              applyStatusEffect(closest, "poison", POISON_DURATION_MS);
+              this.broadcast("status_applied", { sessionId: closestSid, effect: "poison" });
+            }
             if (closest.hp <= 0) {
               goblin.targetPlayerId = "";
+              closest.statusEffect = ""; closest.statusEffectEnd = 0;
               this.broadcast("kill", { targetId: closestSid, killerId: goblin.id, killerName: "Goblin", xp: 0 });
             }
           }
@@ -1116,6 +1136,33 @@ export class GameRoom extends Room<GameState> {
         }
       });
     }, MANA_REGEN_MS);
+
+    // Status effect DOT tick
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.players.forEach((player, sid) => {
+        if (player.hp <= 0 || !player.statusEffect) return;
+        // Check if effect expired
+        if (now >= player.statusEffectEnd) {
+          player.statusEffect = "";
+          player.statusEffectEnd = 0;
+          return;
+        }
+        // Apply DOT damage
+        let dotDmg = 0;
+        if (player.statusEffect === "poison") dotDmg = POISON_DAMAGE;
+        else if (player.statusEffect === "burn") dotDmg = BURN_DAMAGE;
+        if (dotDmg > 0) {
+          player.hp = Math.max(0, player.hp - dotDmg);
+          this.broadcast("status_tick", { sessionId: sid, effect: player.statusEffect, damage: dotDmg });
+          if (player.hp <= 0) {
+            player.statusEffect = "";
+            player.statusEffectEnd = 0;
+            this.broadcast("kill", { targetId: sid, killerId: player.statusEffect === "poison" ? "poison" : "burn", killerName: player.statusEffect === "poison" ? "Poison" : "Fire", xp: 0 });
+          }
+        }
+      });
+    }, 1500); // tick every 1.5s
 
     // ── Movement ──
     this.onMessage("move", (client, data: { dx: number; dy: number }) => {

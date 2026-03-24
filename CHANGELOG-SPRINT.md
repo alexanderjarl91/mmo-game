@@ -1,12 +1,4 @@
-# Creative Sprint Changelog 🎮
-
-**Branch:** `feature/creative-sprint`
-**Started:** 2026-03-23 ~23:30 UTC
-**Status:** In Progress
-
-Alex — read this in the morning to see what got built overnight.
-
----
+# 🎮 Creative Sprint Changelog
 
 ## Features Added
 
@@ -18,29 +10,45 @@ Alex — read this in the morning to see what got built overnight.
 - Purple-themed UI with hover effects
 
 ### 2. 🗺️ Minimap
-- Minimap with terrain colors, monster dots, player dots, and viewport indicator
-- Shows the full map in miniature in the corner
+- Top-right corner minimap showing full world terrain
+- Color-coded tiles matching actual map (grass, water, trees, paths, temples)
+- Monster dots: colored for slimes, red for wolves, green for goblins, white for skeletons
+- Blue dots for other players, white pulsing dot for you
+- Camera viewport rectangle overlay
+- Responsive sizing for mobile
 
-### 3. 🌙 Day/Night Cycle
-- 10-minute full cycle: dawn → day → dusk → night
-- Subtle overlay effects (toned down 60% per Alex's request)
+### 3. 🌅 Day/Night Cycle
+- 10-minute full day cycle: Dawn → Day → Dusk → Night
+- Warm orange tint at dawn, red/purple at dusk, dark blue at night
+- Time-of-day indicator (🌅/☀️/🌇/🌙) in top-right
+- Smooth transitions between all phases
 
 ### 4. 💀 Death Animation
-- Fade out, red flash, and tilt effect on death
+- Red flash burst when player dies
+- Sprite fades to 15% opacity over 1.5 seconds
+- Skull emoji tilts and falls downward
+- Smooth animation visible to all players
 
-### 5. ✨ Level-up Effects
-- Particle burst and golden ring animation on level up
+### 5. ⭐ Level-Up Particle Effects
+- 30 golden particles burst outward on level up
+- Expanding golden ring animation around player
+- "⭐ LEVEL X!" text floats above player
+- Particles have gravity, fade, and shrink over time
 
-### 6. ⚔️ Equipment System
-- Weapons and armor drop from monsters
-- Equip slots (weapon, helmet, chest, legs)
-- Stat bonuses (ATK, DEF) from gear
-- Defense stat reduces incoming damage
+### 6. 👹 Goblins & Skeletons — New Monster Types
+- **Goblins**: Green creatures with pointy ears (80 HP, 15 ATK, 50 XP)
+  - 3 variants: Normal, Archer (bow), Shaman (staff + glow)
+  - Spawn in outer grasslands, aggressive, fast movement
+  - Drop iron weapons/armor and potions
+- **Skeletons**: Bony undead figures (200 HP, 30 ATK, 120 XP)
+  - Spawn at map edges (dangerous border zones)
+  - Slow but deadly, wide 10-tile aggro range
+  - Drop rare gear including Fire Staff
+- Full combat integration, minimap dots, click-to-target
 
-### 7. 👹 New Monster Types
-- **Goblins** — new mid-tier enemy
-- **Skeletons** — tougher enemy type
-- Power Shot works on all monster types
-
-### 8. 🔊 Sound Effects
-- Procedural audio via Web Audio API (hits, spells, ambient)
+### 7. 🎯 Target Info Frame
+- Centered top HUD showing current target details
+- Name with color coding per monster type
+- Dynamic HP bar (green → yellow → red)
+- HP numbers below the bar
+- Red-bordered frame for clear visual

@@ -27,4 +27,7 @@ export class PlayerState extends Schema {
   @type("string") equipLegs: string = "";
   @type("string") equipBoots: string = "";
   @type("number") defense: number = 0; // total defense from equipment
+  // Status effects (synced to client for visuals)
+  @type("string") statusEffect: string = ""; // "poison" | "burn" | "" 
+  @type("number") statusEffectEnd: number = 0; // server timestamp when effect expires
 }

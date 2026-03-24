@@ -190,6 +190,74 @@ export function sfxCleave() {
   });
 }
 
+// Ambient forest sounds (subtle procedural wind + birds)
+let ambientStarted = false;
+let ambientGain: GainNode | null = null;
+
+export function startAmbient() {
+  if (ambientStarted || muted) return;
+  const c = getCtx();
+  if (!c) return;
+  ambientStarted = true;
+
+  // Wind noise (filtered white noise)
+  const bufferSize = 2 * c.sampleRate; // 2 seconds
+  const noiseBuffer = c.createBuffer(1, bufferSize, c.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+  const noise = c.createBufferSource();
+  noise.buffer = noiseBuffer;
+  noise.loop = true;
+
+  const filter = c.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 400;
+  filter.Q.value = 0.5;
+
+  // LFO for wind variation
+  const lfo = c.createOscillator();
+  const lfoGain = c.createGain();
+  lfo.frequency.value = 0.15;
+  lfoGain.gain.value = 100;
+  lfo.connect(lfoGain).connect(filter.frequency);
+  lfo.start();
+
+  ambientGain = c.createGain();
+  ambientGain.gain.value = 0.03; // very subtle
+
+  noise.connect(filter).connect(ambientGain).connect(c.destination);
+  noise.start();
+
+  // Occasional bird chirps
+  setInterval(() => {
+    if (muted || !ambientGain) return;
+    if (Math.random() > 0.3) return;
+    play((c, t) => {
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      osc.type = "sine";
+      const baseFreq = 2000 + Math.random() * 2000;
+      osc.frequency.setValueAtTime(baseFreq, t);
+      osc.frequency.linearRampToValueAtTime(baseFreq + 500 * (Math.random() - 0.3), t + 0.08);
+      osc.frequency.linearRampToValueAtTime(baseFreq - 200, t + 0.12);
+      gain.gain.setValueAtTime(0.015, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      osc.connect(gain).connect(c.destination);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    });
+  }, 3000 + Math.random() * 4000);
+}
+
+export function stopAmbient() {
+  ambientStarted = false;
+  if (ambientGain) {
+    ambientGain.gain.value = 0;
+    ambientGain = null;
+  }
+}
+
 export function sfxChat() {
   play((c, t) => {
     const osc = c.createOscillator();

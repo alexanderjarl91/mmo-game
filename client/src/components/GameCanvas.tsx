@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { joinGame, sendMove, sendSetTarget, sendClearTarget } from "../lib/network";
-import { sfxHit, sfxPlayerHit, sfxKill, sfxLevelUp, sfxHeal, sfxLoot, sfxDeath, sfxArrow, sfxCleave, sfxChat, sfxEquip, toggleMute, isMuted } from "../lib/sound";
+import { sfxHit, sfxPlayerHit, sfxKill, sfxLevelUp, sfxHeal, sfxLoot, sfxDeath, sfxArrow, sfxCleave, sfxChat, sfxEquip, toggleMute, isMuted, startAmbient } from "../lib/sound";
 import type { Room } from "colyseus.js";
 
 /* ── Types ─────────────────────────────────────────── */
@@ -738,6 +738,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
   // Click-to-target handler
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    startAmbient(); // Start ambient on first click (requires user gesture)
     const canvas = canvasRef.current;
     if (!canvas) return;
     const me = playersRef.current.get(sessionIdRef.current);
