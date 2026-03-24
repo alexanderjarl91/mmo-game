@@ -1,5 +1,6 @@
 import { Schema, ArraySchema, type } from "@colyseus/schema";
 import { InventorySlot } from "./InventorySlot";
+import { QuestSlot } from "./QuestSlot";
 
 export class PlayerState extends Schema {
   @type("number") x: number = 0;
@@ -30,4 +31,7 @@ export class PlayerState extends Schema {
   // Status effects (synced to client for visuals)
   @type("string") statusEffect: string = ""; // "poison" | "burn" | "" 
   @type("number") statusEffectEnd: number = 0; // server timestamp when effect expires
+  // Quest system
+  @type([QuestSlot]) quests = new ArraySchema<QuestSlot>();
+  completedQuestIds: Set<string> = new Set(); // not synced via schema, tracked server-side
 }

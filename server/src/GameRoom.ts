@@ -10,6 +10,8 @@ import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
 import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
 import type { EquipSlot } from "./items";
+import { QuestSlot } from "./QuestSlot";
+import { QUESTS, getAvailableQuests, getTurnInQuests } from "./quests";
 
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
@@ -191,6 +193,32 @@ function applyStatusEffect(player: PlayerState, effect: "poison" | "burn", durat
 function applyDefense(rawDamage: number, defense: number): number {
   // Defense reduces damage: dmg * 100 / (100 + defense)
   return Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
+}
+
+function updateQuestProgress(player: PlayerState, monsterType: string, room: GameRoom, sessionId: string) {
+  for (let i = 0; i < player.quests.length; i++) {
+    const q = player.quests.at(i);
+    if (!q || q.completed || q.turnedIn) continue;
+    const def = QUESTS[q.questId];
+    if (!def) continue;
+    if (def.killTarget === monsterType) {
+      q.progress = Math.min(q.progress + 1, q.required);
+      if (q.progress >= q.required) {
+        q.completed = true;
+        // Notify the player
+        const client = room.clients.find(c => c.sessionId === sessionId);
+        if (client) {
+          client.send("quest_complete_ready", { questId: q.questId, questName: def.name, npcId: def.npcId });
+        }
+        room.broadcast("quest_progress", { sessionId, questId: q.questId, progress: q.progress, required: q.required, completed: true });
+      } else {
+        const client = room.clients.find(c => c.sessionId === sessionId);
+        if (client) {
+          client.send("quest_progress", { questId: q.questId, progress: q.progress, required: q.required, completed: false, questName: def.name });
+        }
+      }
+    }
+  }
 }
 
 function checkLevelUp(player: PlayerState, room: GameRoom, sessionId: string) {
@@ -389,6 +417,25 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
 export class GameRoom extends Room<GameState> {
   maxClients = 50;
 
+  // Broadcast a kill event and auto-update quest progress for the killer
+  broadcastKillAndQuest(data: { targetId: string; killerId: string; killerName: string; xp: number }) {
+    this.broadcast("kill", data);
+    // Only update quests for player kills (not monster-on-player kills)
+    const player = this.state.players.get(data.killerId);
+    if (!player) return;
+    // Determine monster type from targetId prefix
+    const tid = data.targetId;
+    let monsterType = "";
+    if (tid.startsWith("slime_")) monsterType = "slime";
+    else if (tid.startsWith("wolf_")) monsterType = "wolf";
+    else if (tid.startsWith("goblin_")) monsterType = "goblin";
+    else if (tid.startsWith("skeleton_")) monsterType = "skeleton";
+    else if (tid.startsWith("boss_")) monsterType = "boss";
+    if (monsterType) {
+      updateQuestProgress(player, monsterType, this, data.killerId);
+    }
+  }
+
   isTileOccupiedByPlayer(newX: number, newY: number, excludeSessionId: string): boolean {
     let occupied = false;
     this.state.players.forEach((p, sid) => {
@@ -520,7 +567,7 @@ export class GameRoom extends Room<GameState> {
           client.send("loot_received", { items: lootNames });
         }
 
-        this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+        this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
 
         this.clock.setTimeout(() => {
           const spawn = SLIME_SPAWNS[sIdx];
@@ -590,7 +637,7 @@ export class GameRoom extends Room<GameState> {
           client.send("loot_received", { items: wolfLootNames });
         }
 
-        this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+        this.broadcastKillAndQuest( { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
 
         // Find spawn index
         const wIdx = parseInt(wolfId.split("_")[1]) || 0;
@@ -681,7 +728,7 @@ export class GameRoom extends Room<GameState> {
         const gLootNames: string[] = [];
         for (const drop of gLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; gLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
         if (gLootNames.length > 0) client.send("loot_received", { items: gLootNames });
-        this.broadcast("kill", { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+        this.broadcastKillAndQuest( { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
         this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
       }
       return;
@@ -712,7 +759,7 @@ export class GameRoom extends Room<GameState> {
         const sLootNames: string[] = [];
         for (const drop of sLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; sLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
         if (sLootNames.length > 0) client.send("loot_received", { items: sLootNames });
-        this.broadcast("kill", { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+        this.broadcastKillAndQuest( { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
         this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
       }
       return;
@@ -754,7 +801,7 @@ export class GameRoom extends Room<GameState> {
         if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
         checkLevelUp(player, this, client.sessionId);
         this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
-        this.broadcast("kill", { targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+        this.broadcastKillAndQuest( { targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
 
         // Schedule respawn
         this.clock.setTimeout(() => {
@@ -1512,6 +1559,150 @@ export class GameRoom extends Room<GameState> {
       const idx = pd.get(npc.id) || 0;
       client.send("npc_dialogue", { npcId: npc.id, name: npc.name, message: npc.dialogue[idx % npc.dialogue.length] });
       pd.set(npc.id, (idx + 1) % npc.dialogue.length);
+
+      // Also send available quests and turn-in quests for this NPC
+      const activeQuestIds = new Set<string>();
+      const activeQuestMap = new Map<string, { progress: number }>();
+      for (let i = 0; i < player.quests.length; i++) {
+        const q = player.quests.at(i);
+        if (q && !q.turnedIn) {
+          activeQuestIds.add(q.questId);
+          activeQuestMap.set(q.questId, { progress: q.progress });
+        }
+      }
+
+      const available = getAvailableQuests(npc.id, player.level, player.completedQuestIds, activeQuestIds);
+      const turnIn = getTurnInQuests(npc.id, activeQuestMap);
+
+      if (available.length > 0 || turnIn.length > 0) {
+        client.send("npc_quests", {
+          npcId: npc.id,
+          npcName: npc.name,
+          available: available.map(q => ({
+            id: q.id, name: q.name, description: q.description, icon: q.icon,
+            killTarget: q.killTarget, killCount: q.killCount,
+            rewards: q.rewards, requiredLevel: q.requiredLevel,
+          })),
+          turnIn: turnIn.map(q => ({
+            id: q.id, name: q.name, icon: q.icon,
+            rewards: q.rewards,
+          })),
+        });
+      }
+    });
+
+    // ── Quest Accept ──
+    this.onMessage("quest_accept", (client, data: { questId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const questDef = QUESTS[data.questId];
+      if (!questDef) return;
+      if (player.level < questDef.requiredLevel) return;
+      if (questDef.prerequisite && !player.completedQuestIds.has(questDef.prerequisite)) return;
+
+      // Check not already active
+      for (let i = 0; i < player.quests.length; i++) {
+        const q = player.quests.at(i);
+        if (q && q.questId === data.questId && !q.turnedIn) return;
+      }
+      // Check not already completed (unless repeatable)
+      if (player.completedQuestIds.has(data.questId) && questDef.repeatCooldownMs === undefined) return;
+
+      // Max 5 active quests
+      let activeCount = 0;
+      for (let i = 0; i < player.quests.length; i++) {
+        const q = player.quests.at(i);
+        if (q && !q.turnedIn) activeCount++;
+      }
+      if (activeCount >= 5) {
+        client.send("quest_error", { message: "Quest log full! (max 5 active quests)" });
+        return;
+      }
+
+      const slot = new QuestSlot();
+      slot.questId = data.questId;
+      slot.progress = 0;
+      slot.required = questDef.killCount;
+      slot.completed = false;
+      slot.turnedIn = false;
+      player.quests.push(slot);
+
+      client.send("quest_accepted", { questId: data.questId, questName: questDef.name, icon: questDef.icon });
+    });
+
+    // ── Quest Turn In ──
+    this.onMessage("quest_turnin", (client, data: { questId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const questDef = QUESTS[data.questId];
+      if (!questDef) return;
+
+      // Find the active quest slot
+      let questSlot: QuestSlot | null = null;
+      let questIdx = -1;
+      for (let i = 0; i < player.quests.length; i++) {
+        const q = player.quests.at(i);
+        if (q && q.questId === data.questId && q.completed && !q.turnedIn) {
+          questSlot = q;
+          questIdx = i;
+          break;
+        }
+      }
+      if (!questSlot) return;
+
+      // Grant rewards
+      player.xp += questDef.rewards.xp;
+      player.gold += questDef.rewards.gold;
+      if (questDef.rewards.items) {
+        for (const item of questDef.rewards.items) {
+          addToInventory(player, item.itemId, item.quantity);
+        }
+      }
+
+      // Mark as completed
+      questSlot.turnedIn = true;
+      player.completedQuestIds.add(data.questId);
+
+      // Remove from active quests array
+      player.quests.splice(questIdx, 1);
+
+      // Check level up
+      checkLevelUp(player, this, client.sessionId);
+
+      // Build reward description
+      const rewardParts: string[] = [`${questDef.rewards.xp} XP`, `${questDef.rewards.gold} gold`];
+      if (questDef.rewards.items) {
+        for (const ri of questDef.rewards.items) {
+          const it = ITEMS[ri.itemId];
+          if (it) rewardParts.push(`${it.icon || ""} ${it.name}${ri.quantity > 1 ? ` x${ri.quantity}` : ""}`);
+        }
+      }
+
+      client.send("quest_turned_in", {
+        questId: data.questId,
+        questName: questDef.name,
+        rewards: rewardParts.join(", "),
+      });
+
+      this.broadcast("quest_completed_announce", {
+        playerName: player.name,
+        questName: questDef.name,
+        questIcon: questDef.icon,
+      });
+    });
+
+    // ── Quest Abandon ──
+    this.onMessage("quest_abandon", (client, data: { questId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) return;
+      for (let i = 0; i < player.quests.length; i++) {
+        const q = player.quests.at(i);
+        if (q && q.questId === data.questId && !q.turnedIn) {
+          player.quests.splice(i, 1);
+          client.send("quest_abandoned", { questId: data.questId });
+          break;
+        }
+      }
     });
 
     // ── Heal spell ──
@@ -1643,7 +1834,7 @@ export class GameRoom extends Room<GameState> {
           player.xp += xpGain;
           const newLevel = levelFromXp(player.xp);
           if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
-          this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
           this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
         }
         return;
@@ -1665,7 +1856,7 @@ export class GameRoom extends Room<GameState> {
           player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
           const newLevel = levelFromXp(player.xp);
           if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
-          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
         return;
@@ -1687,7 +1878,7 @@ export class GameRoom extends Room<GameState> {
           player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
           const loot = rollLoot("goblin"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
           checkLevelUp(player, this, client.sessionId);
-          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
           this.clock.setTimeout(() => { goblinT.x = goblinT.spawnX; goblinT.y = goblinT.spawnY; goblinT.hp = GOBLIN_HP; goblinT.maxHp = GOBLIN_HP; goblinT.targetPlayerId = ""; goblinT.alive = true; }, GOBLIN_RESPAWN_MS);
         }
         return;
@@ -1709,7 +1900,7 @@ export class GameRoom extends Room<GameState> {
           player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
           const loot = rollLoot("skeleton"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
           checkLevelUp(player, this, client.sessionId);
-          this.broadcast("kill", { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
           this.clock.setTimeout(() => { skelT.x = skelT.spawnX; skelT.y = skelT.spawnY; skelT.hp = SKELETON_HP; skelT.maxHp = SKELETON_HP; skelT.targetPlayerId = ""; skelT.alive = true; }, SKELETON_RESPAWN_MS);
         }
         return;
@@ -1759,7 +1950,7 @@ export class GameRoom extends Room<GameState> {
           this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
           const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
           player.xp += xpGain;
-          this.broadcast("kill", { targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
           this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
         }
       });
@@ -1778,7 +1969,7 @@ export class GameRoom extends Room<GameState> {
           if (player.targetId === wolfId) player.targetId = "";
           player.xp += WOLF_XP;
           player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
-          this.broadcast("kill", { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+          this.broadcastKillAndQuest( { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
       });
@@ -1797,7 +1988,7 @@ export class GameRoom extends Room<GameState> {
           goblin.alive = false; goblin.targetPlayerId = "";
           if (player.targetId === goblinId) player.targetId = "";
           player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
-          this.broadcast("kill", { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+          this.broadcastKillAndQuest( { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
           this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
         }
       });
@@ -1816,7 +2007,7 @@ export class GameRoom extends Room<GameState> {
           skeleton.alive = false; skeleton.targetPlayerId = "";
           if (player.targetId === skeletonId) player.targetId = "";
           player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
-          this.broadcast("kill", { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+          this.broadcastKillAndQuest( { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
           this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
         }
       });

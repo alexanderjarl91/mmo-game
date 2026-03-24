@@ -166,6 +166,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const [chatOpen, setChatOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [questLogOpen, setQuestLogOpen] = useState(false);
+  const [questDialogOpen, setQuestDialogOpen] = useState(false);
+  const [questDialogData, setQuestDialogData] = useState<{ npcId: string; npcName: string; available: any[]; turnIn: any[] } | null>(null);
+  const questTrackerRef = useRef<Array<{ questId: string; name: string; icon: string; progress: number; required: number; completed: boolean; killTarget: string }>>([]);
+  const questNotifRef = useRef<Array<{ text: string; time: number; color: string }>>([]);
+  const npcQuestMarkersRef = useRef<Map<string, "available" | "turnin" | "">>(new Map());
   const lastPotionUse = useRef(0);
   const [chatText, setChatText] = useState("");
   const [soundMuted, setSoundMuted] = useState(false);
@@ -317,7 +323,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           case TILE.FLOWERS: {
             const fc = ["#FF5252", "#FFEB3B", "#E040FB", "#FF6D00", "#69F0AE"];
             for (let f = 0; f < 6; f++) {
-              const fx = px + 10 + ((f * 17) % 44), fy = py + 10 + ((f * 23) % 44);
+              const flowerSway = Math.sin(time / 800 + f * 1.5 + tx * 3) * 2;
+              const fx = px + 10 + ((f * 17) % 44) + flowerSway, fy = py + 10 + ((f * 23) % 44);
+              // Stem
+              ctx.strokeStyle = "#4CAF50"; ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(fx, fy + 4); ctx.lineTo(fx - flowerSway * 0.3, fy + 10); ctx.stroke();
+              // Petals
               ctx.fillStyle = fc[f % fc.length]; ctx.beginPath(); ctx.arc(fx, fy, 4, 0, Math.PI * 2); ctx.fill();
               ctx.fillStyle = "#FFFF00"; ctx.beginPath(); ctx.arc(fx, fy, 2, 0, Math.PI * 2); ctx.fill();
             }
@@ -637,6 +648,62 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         sfxLoot();
       });
 
+      // ── Quest messages ──
+      room.onMessage("npc_quests", (data: { npcId: string; npcName: string; available: any[]; turnIn: any[] }) => {
+        if (data.available.length > 0 || data.turnIn.length > 0) {
+          setQuestDialogData(data);
+          setQuestDialogOpen(true);
+        }
+      });
+
+      room.onMessage("quest_accepted", (data: { questId: string; questName: string; icon: string }) => {
+        const now = performance.now();
+        questNotifRef.current.push({ text: `📜 Quest accepted: ${data.icon} ${data.questName}`, time: now, color: "#ffd700" });
+        if (questNotifRef.current.length > 5) questNotifRef.current.splice(0, questNotifRef.current.length - 5);
+      });
+
+      room.onMessage("quest_progress", (data: { questId: string; progress: number; required: number; completed: boolean; questName?: string }) => {
+        const tracker = questTrackerRef.current;
+        const existing = tracker.find(q => q.questId === data.questId);
+        if (existing) {
+          existing.progress = data.progress;
+          existing.completed = data.completed;
+        }
+        if (!data.completed) {
+          const now = performance.now();
+          questNotifRef.current.push({ text: `⚔️ ${data.questName || data.questId}: ${data.progress}/${data.required}`, time: now, color: "#aaddff" });
+          if (questNotifRef.current.length > 5) questNotifRef.current.splice(0, questNotifRef.current.length - 5);
+        }
+      });
+
+      room.onMessage("quest_complete_ready", (data: { questId: string; questName: string; npcId: string }) => {
+        const now = performance.now();
+        questNotifRef.current.push({ text: `✅ Quest complete: ${data.questName} — Return to NPC!`, time: now, color: "#2ecc71" });
+        if (questNotifRef.current.length > 5) questNotifRef.current.splice(0, questNotifRef.current.length - 5);
+      });
+
+      room.onMessage("quest_turned_in", (data: { questId: string; questName: string; rewards: string }) => {
+        const now = performance.now();
+        questNotifRef.current.push({ text: `🎉 ${data.questName} complete! Rewards: ${data.rewards}`, time: now, color: "#ffd700" });
+        if (questNotifRef.current.length > 5) questNotifRef.current.splice(0, questNotifRef.current.length - 5);
+        questTrackerRef.current = questTrackerRef.current.filter(q => q.questId !== data.questId);
+        sfxLevelUp();
+      });
+
+      room.onMessage("quest_abandoned", (data: { questId: string }) => {
+        questTrackerRef.current = questTrackerRef.current.filter(q => q.questId !== data.questId);
+      });
+
+      room.onMessage("quest_error", (data: { message: string }) => {
+        const now = performance.now();
+        questNotifRef.current.push({ text: `❌ ${data.message}`, time: now, color: "#e74c3c" });
+      });
+
+      room.onMessage("quest_completed_announce", (data: { playerName: string; questName: string; questIcon: string }) => {
+        killFeedRef.current.push({ text: `${data.playerName} completed ${data.questIcon} ${data.questName}!`, time: performance.now() });
+        if (killFeedRef.current.length > 8) killFeedRef.current.shift();
+      });
+
       // Players
       room.state.players.onAdd((player: any, sessionId: string) => {
         const data: PlayerData = {
@@ -725,6 +792,35 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               const s = player.inventory[j];
               if (s) p.inventory.push({ itemId: s.itemId, quantity: s.quantity });
             }
+          }
+          // Re-sync quests for local player
+          if (sid === sessionIdRef.current && player.quests) {
+            const tracker: typeof questTrackerRef.current = [];
+            for (let j = 0; j < player.quests.length; j++) {
+              const q = player.quests[j];
+              if (q && !q.turnedIn) {
+                const QUEST_DEFS: Record<string, { name: string; icon: string; killTarget: string }> = {
+                  slime_hunt: { name: "Slime Trouble", icon: "🟢", killTarget: "slime" },
+                  wolf_menace: { name: "Wolf Menace", icon: "🐺", killTarget: "wolf" },
+                  goblin_raid: { name: "Goblin Raiders", icon: "👹", killTarget: "goblin" },
+                  skeleton_scourge: { name: "Undead Scourge", icon: "💀", killTarget: "skeleton" },
+                  dragon_slayer: { name: "Dragon Slayer", icon: "🐉", killTarget: "boss" },
+                  slime_bounty: { name: "Slime Bounty", icon: "💰", killTarget: "slime" },
+                  wolf_bounty: { name: "Wolf Bounty", icon: "💰", killTarget: "wolf" },
+                };
+                const def = QUEST_DEFS[q.questId];
+                tracker.push({
+                  questId: q.questId,
+                  name: def?.name || q.questId,
+                  icon: def?.icon || "📜",
+                  progress: q.progress,
+                  required: q.required,
+                  completed: q.completed,
+                  killTarget: def?.killTarget || "",
+                });
+              }
+            }
+            questTrackerRef.current = tracker;
           }
         });
       });
@@ -1046,10 +1142,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       }
       if (e.key === "Escape" && inventoryOpen) { setInventoryOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && shopOpen) { setShopOpen(false); canvasRef.current?.focus(); return; }
+      if (e.key === "Escape" && questLogOpen) { setQuestLogOpen(false); canvasRef.current?.focus(); return; }
+      if (e.key === "Escape" && questDialogOpen) { setQuestDialogOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && chatOpen) { setChatOpen(false); setChatText(""); canvasRef.current?.focus(); return; }
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
+      if (e.key === "q" || e.key === "Q") { setQuestLogOpen(prev => !prev); return; }
       if (e.key === "m" || e.key === "M") { setSoundMuted(toggleMute()); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
@@ -1083,7 +1182,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen]);
+  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen, questLogOpen, questDialogOpen]);
 
   const handleDpad = (dx: number, dy: number, pressed: boolean) => {
     if (pressed) dpadRef.current = { dx, dy };
@@ -1680,6 +1779,30 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           const dist = Math.abs(Math.round(me.toX / TILE_SIZE) - npc.x) + Math.abs(Math.round(me.toY / TILE_SIZE) - npc.y);
           if (dist <= 2) { ctx.font = "10px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillText("[E] Talk", nx, ny - 54); }
         }
+
+        // Quest markers above NPC
+        const questMarker = npcQuestMarkersRef.current.get(npc.id);
+        if (questMarker) {
+          const bounce = Math.sin(time / 300) * 4;
+          const markerY = ny - 58 + bounce;
+          if (questMarker === "turnin") {
+            // Yellow ? for turn-in
+            ctx.font = "bold 22px 'Segoe UI', sans-serif";
+            ctx.fillStyle = "#ffd700";
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 3;
+            ctx.strokeText("?", nx - 1, markerY);
+            ctx.fillText("?", nx - 1, markerY);
+          } else if (questMarker === "available") {
+            // Yellow ! for available quest
+            ctx.font = "bold 22px 'Segoe UI', sans-serif";
+            ctx.fillStyle = "#ffd700";
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 3;
+            ctx.strokeText("!", nx - 1, markerY);
+            ctx.fillText("!", nx - 1, markerY);
+          }
+        }
       }
 
       /* ── Players ─────────────────────────────────────── */
@@ -1994,6 +2117,90 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "left";
         ctx.fillStyle = "#2ecc71";
         ctx.fillText(`+ ${ln.text}`, 12, h - 100 - i * 20);
+        ctx.restore();
+      });
+
+      /* ── Quest Tracker (top-left, below player count) ── */
+      
+      const activeQuests = questTrackerRef.current;
+      if (activeQuests.length > 0) {
+        const qStartY = 52;
+        ctx.save();
+        // Background panel
+        const panelH = activeQuests.length * 28 + 22;
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.beginPath();
+        ctx.roundRect(6, qStartY - 16, 200, panelH, 6);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,215,0,0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.font = "bold 11px 'Segoe UI', sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#ffd700";
+        ctx.fillText("📜 Quests", 14, qStartY - 2);
+
+        activeQuests.forEach((q, i) => {
+          const qy = qStartY + 14 + i * 28;
+          const isComplete = q.completed;
+          ctx.font = "12px 'Segoe UI', sans-serif";
+          ctx.fillStyle = isComplete ? "#2ecc71" : "#ddd";
+          ctx.fillText(`${q.icon} ${q.name}`, 14, qy);
+          ctx.font = "10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = isComplete ? "#2ecc71" : "#aaa";
+          const progressText = isComplete ? "✅ Complete!" : `${q.progress}/${q.required} ${q.killTarget}s`;
+          ctx.fillText(progressText, 22, qy + 14);
+          // Progress bar
+          if (!isComplete) {
+            const barX = 140, barY = qy + 6, barW = 58, barH = 6;
+            ctx.fillStyle = "rgba(255,255,255,0.1)";
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = "#3498db";
+            ctx.fillRect(barX, barY, barW * (q.progress / q.required), barH);
+          }
+        });
+        ctx.restore();
+      }
+
+      // Update NPC quest markers each frame
+      const markers = npcQuestMarkersRef.current;
+      markers.clear();
+      if (activeQuests.length > 0) {
+        for (const q of activeQuests) {
+          if (q.completed) {
+            // Map quest to NPC
+            const npcMap: Record<string, string> = {
+              slime_hunt: "elder", wolf_menace: "elder",
+              goblin_raid: "innkeeper",
+              skeleton_scourge: "blacksmith",
+              dragon_slayer: "merchant",
+              slime_bounty: "fisherman", wolf_bounty: "fisherman",
+            };
+            const npcId = npcMap[q.questId];
+            if (npcId) markers.set(npcId, "turnin");
+          }
+        }
+      }
+      // Mark NPCs that have available quests (check all NPCs that might have quests)
+      const questNpcs = ["elder", "innkeeper", "blacksmith", "merchant", "fisherman"];
+      for (const npcId of questNpcs) {
+        if (!markers.has(npcId)) {
+          // Simple heuristic: show ! if NPC is a quest giver (we can't check prereqs client-side perfectly, so just show for all quest NPCs)
+          markers.set(npcId, "available");
+        }
+      }
+
+      /* ── Quest Notifications (right side) ──── */
+      
+      questNotifRef.current = questNotifRef.current.filter(n => now - n.time < 4000);
+      questNotifRef.current.forEach((qn, i) => {
+        const age = now - qn.time;
+        const alpha = age > 3500 ? (4000 - age) / 500 : Math.min(age / 150, 1);
+        ctx.save(); ctx.globalAlpha = alpha;
+        ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "right";
+        ctx.fillStyle = qn.color;
+        ctx.fillText(qn.text, w - 12, h / 2 - 60 - i * 22);
         ctx.restore();
       });
 
@@ -2433,6 +2640,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <span style={{ color: "#f1c40f", fontWeight: "bold", fontSize: 13 }}>💰 {myStats.gold}</span>
             <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setInventoryOpen(prev => !prev); }}>🎒</div>
+            <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setQuestLogOpen(prev => !prev); }}>📜</div>
           </div>
         </div>
       )}
@@ -2629,6 +2837,175 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               );
             })}
             <button onClick={() => setShopOpen(false)} style={{ marginTop: 12, width: "100%", padding: "8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#aaa", cursor: "pointer", fontSize: 14 }}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Quest Log overlay */}
+      {questLogOpen && (() => {
+        const quests = questTrackerRef.current;
+        return (
+          <div style={{
+            position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+            background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 30,
+          }} onClick={() => setQuestLogOpen(false)}>
+            <div style={{
+              background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+              border: "2px solid #ffd700", borderRadius: 12, padding: 20,
+              minWidth: 350, maxWidth: 450,
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <h2 style={{ color: "#ffd700", margin: 0, fontSize: 18 }}>📜 Quest Log</h2>
+                <span style={{ color: "#888", fontSize: 12 }}>{quests.length}/5 quests</span>
+              </div>
+              {quests.length === 0 ? (
+                <div style={{ color: "#666", textAlign: "center", padding: "20px 0", fontSize: 14 }}>
+                  No active quests. Talk to NPCs (press E) to find quests!
+                </div>
+              ) : (
+                quests.map((q) => (
+                  <div key={q.questId} style={{
+                    padding: "10px 12px", borderRadius: 8, marginBottom: 8,
+                    background: q.completed ? "rgba(46,204,113,0.15)" : "rgba(255,255,255,0.05)",
+                    border: q.completed ? "1px solid rgba(46,204,113,0.4)" : "1px solid rgba(255,255,255,0.1)",
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <span style={{ fontSize: 16, marginRight: 6 }}>{q.icon}</span>
+                        <span style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{q.name}</span>
+                      </div>
+                      {q.completed ? (
+                        <span style={{ color: "#2ecc71", fontSize: 12, fontWeight: "bold" }}>✅ Complete</span>
+                      ) : (
+                        <span style={{ color: "#3498db", fontSize: 12 }}>{q.progress}/{q.required}</span>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      {!q.completed && (
+                        <div style={{ height: 6, background: "rgba(255,255,255,0.1)", borderRadius: 3, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${(q.progress / q.required) * 100}%`, background: "linear-gradient(90deg, #3498db, #2ecc71)", borderRadius: 3, transition: "width 0.3s" }} />
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                        <span style={{ color: "#888", fontSize: 11 }}>Kill {q.required} {q.killTarget}{q.required > 1 ? "s" : ""}</span>
+                        <button onClick={() => {
+                          roomRef.current?.send("quest_abandon", { questId: q.questId });
+                          setQuestLogOpen(false);
+                        }} style={{
+                          padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(231,76,60,0.4)",
+                          background: "transparent", color: "#e74c3c", cursor: "pointer", fontSize: 10,
+                        }}>Abandon</button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+              <button onClick={() => setQuestLogOpen(false)} style={{
+                marginTop: 8, width: "100%", padding: "8px", borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+                color: "#94a3b8", cursor: "pointer", fontSize: 12,
+              }}>Close (Q)</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* NPC Quest Dialog */}
+      {questDialogOpen && questDialogData && (
+        <div style={{
+          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 35,
+        }} onClick={() => setQuestDialogOpen(false)}>
+          <div style={{
+            background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+            border: "2px solid #ffd700", borderRadius: 12, padding: 20,
+            minWidth: 360, maxWidth: 480,
+          }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: "#ffd700", margin: "0 0 14px 0", fontSize: 18 }}>
+              💬 {questDialogData.npcName}
+            </h2>
+
+            {/* Turn-in quests first */}
+            {questDialogData.turnIn.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ color: "#2ecc71", fontSize: 12, fontWeight: "bold", marginBottom: 6 }}>Ready to Turn In:</div>
+                {questDialogData.turnIn.map((q: any) => (
+                  <div key={q.id} style={{
+                    padding: "10px 12px", borderRadius: 8, marginBottom: 6,
+                    background: "rgba(46,204,113,0.15)", border: "1px solid rgba(46,204,113,0.4)",
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                  }}>
+                    <div>
+                      <span style={{ fontSize: 16, marginRight: 6 }}>{q.icon}</span>
+                      <span style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{q.name}</span>
+                      <div style={{ color: "#aaa", fontSize: 11, marginTop: 4 }}>
+                        Rewards: {q.rewards.xp} XP, {q.rewards.gold} gold
+                        {q.rewards.items?.map((it: any) => `, ${ITEMS[it.itemId]?.icon || ""} ${ITEMS[it.itemId]?.name || it.itemId}`).join("")}
+                      </div>
+                    </div>
+                    <button onClick={() => {
+                      roomRef.current?.send("quest_turnin", { questId: q.id });
+                      setQuestDialogOpen(false);
+                    }} style={{
+                      padding: "6px 14px", borderRadius: 6, border: "none",
+                      background: "#27ae60", color: "#fff", cursor: "pointer",
+                      fontSize: 13, fontWeight: "bold",
+                    }}>Complete ✅</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Available quests */}
+            {questDialogData.available.length > 0 && (
+              <div>
+                <div style={{ color: "#ffd700", fontSize: 12, fontWeight: "bold", marginBottom: 6 }}>Available Quests:</div>
+                {questDialogData.available.map((q: any) => (
+                  <div key={q.id} style={{
+                    padding: "10px 12px", borderRadius: 8, marginBottom: 6,
+                    background: "rgba(255,215,0,0.08)", border: "1px solid rgba(255,215,0,0.3)",
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: 16, marginRight: 6 }}>{q.icon}</span>
+                        <span style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{q.name}</span>
+                        {q.requiredLevel > 1 && <span style={{ color: "#888", fontSize: 10, marginLeft: 6 }}>Lv.{q.requiredLevel}+</span>}
+                        <div style={{ color: "#aaa", fontSize: 12, marginTop: 4, lineHeight: 1.4 }}>{q.description}</div>
+                        <div style={{ color: "#888", fontSize: 11, marginTop: 4 }}>
+                          Kill {q.killCount} {q.killTarget}{q.killCount > 1 ? "s" : ""}
+                        </div>
+                        <div style={{ color: "#2ecc71", fontSize: 11, marginTop: 2 }}>
+                          Rewards: {q.rewards.xp} XP, {q.rewards.gold} gold
+                          {q.rewards.items?.map((it: any) => `, ${ITEMS[it.itemId]?.icon || ""} ${ITEMS[it.itemId]?.name || it.itemId}`).join("")}
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        roomRef.current?.send("quest_accept", { questId: q.id });
+                        // Add to local tracker immediately
+                        questTrackerRef.current.push({
+                          questId: q.id, name: q.name, icon: q.icon,
+                          progress: 0, required: q.killCount,
+                          completed: false, killTarget: q.killTarget,
+                        });
+                        setQuestDialogOpen(false);
+                      }} style={{
+                        padding: "6px 14px", borderRadius: 6, border: "none",
+                        background: "#f39c12", color: "#fff", cursor: "pointer",
+                        fontSize: 13, fontWeight: "bold", marginLeft: 10, whiteSpace: "nowrap",
+                      }}>Accept 📜</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={() => setQuestDialogOpen(false)} style={{
+              marginTop: 10, width: "100%", padding: "8px", borderRadius: 6,
+              border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+              color: "#94a3b8", cursor: "pointer", fontSize: 12,
+            }}>Close</button>
           </div>
         </div>
       )}
