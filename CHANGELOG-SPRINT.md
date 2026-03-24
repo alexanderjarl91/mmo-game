@@ -2,6 +2,22 @@
 
 ## Features Added
 
+### 12. 📜 Quest System
+- **7 quests** across 5 NPCs with kill objectives and progression chains
+  - **Elder Oak**: Slime Trouble (5 slimes) → Wolf Menace (3 wolves)
+  - **Mira**: Goblin Raiders (4 goblins)
+  - **Forge**: Undead Scourge (3 skeletons, rewards Iron Sword!)
+  - **Pip**: Dragon Slayer (kill the dragon, rewards Fire Staff!)
+  - **Old Gil**: Repeatable bounties (Slime Bounty, Wolf Bounty)
+- Quest prerequisites unlock harder quests as you progress
+- **Quest Tracker HUD** (top-left) shows active quest progress with bars
+- **NPC Quest Markers**: Yellow `!` for available quests, `?` for turn-in
+- **Quest Log** (press `Q` or tap 📜) — view progress, abandon quests
+- Quest notifications for accept, progress, and completion
+- Quest completions announced server-wide in kill feed
+- Rewards: XP, gold, and item drops on turn-in
+- Max 5 active quests at once
+
 ### 1. 🎒 Inventory UI + Shop Fix
 - Press **I** (or tap 🎒 on mobile) to open inventory panel
 - 5×4 grid layout with item icons, names, and stack counts
