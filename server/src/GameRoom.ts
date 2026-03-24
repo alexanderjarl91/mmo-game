@@ -1528,10 +1528,18 @@ export class GameRoom extends Room<GameState> {
       });
     }, 1500); // tick every 1.5s
 
+    // Fishing state (declared early so move handler can cancel it)
+    const fishingPlayers = new Map<string, { startTime: number; duration: number }>();
+
     // ── Movement ──
     this.onMessage("move", (client, data: { dx: number; dy: number }) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
+      // Cancel fishing on move
+      if (fishingPlayers.has(client.sessionId)) {
+        fishingPlayers.delete(client.sessionId);
+        client.send("fish_cancel_notify", {});
+      }
 
       const now = Date.now();
       const last = lastMoveTime.get(client.sessionId) || 0;
@@ -1853,6 +1861,87 @@ export class GameRoom extends Room<GameState> {
       } else {
         client.send("quest_error", { message: "Inventory full!" });
       }
+    });
+
+    // ── Fishing System ──
+    const FISH_LOOT = [
+      { itemId: "small_fish", chance: 0.50, name: "Small Fish", icon: "🐟" },
+      { itemId: "big_fish", chance: 0.25, name: "Big Fish", icon: "🐠" },
+      { itemId: "golden_fish", chance: 0.05, name: "Golden Fish", icon: "✨🐟" },
+      { itemId: "treasure_chest", chance: 0.03, name: "Sunken Treasure", icon: "🧰" },
+    ];
+
+    this.onMessage("fish_start", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (fishingPlayers.has(client.sessionId)) return; // already fishing
+      
+      // Check if adjacent to water
+      const px = Math.round(player.x / TILE_SIZE);
+      const py = Math.round(player.y / TILE_SIZE);
+      let nearWater = false;
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+        const tx = px + dx, ty = py + dy;
+        if (tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H) {
+          if (WORLD_MAP[ty]?.[tx] === TILE.WATER) { nearWater = true; break; }
+        }
+      }
+      if (!nearWater) {
+        client.send("fish_result", { success: false, message: "You need to stand next to water to fish!" });
+        return;
+      }
+      
+      // Start fishing — takes 2-4 seconds
+      const duration = 2000 + Math.random() * 2000;
+      fishingPlayers.set(client.sessionId, { startTime: Date.now(), duration });
+      client.send("fish_cast", { duration });
+      
+      // Schedule the catch
+      this.clock.setTimeout(() => {
+        if (!fishingPlayers.has(client.sessionId)) return; // cancelled
+        fishingPlayers.delete(client.sessionId);
+        
+        const currentPlayer = this.state.players.get(client.sessionId);
+        if (!currentPlayer || currentPlayer.hp <= 0) return;
+        
+        // Roll for catch
+        let caught = false;
+        for (const fish of FISH_LOOT) {
+          if (Math.random() < fish.chance) {
+            if (fish.itemId === "treasure_chest") {
+              // Treasure gives gold directly
+              currentPlayer.gold += 200;
+              client.send("fish_result", { 
+                success: true, 
+                message: `You found a ${fish.icon} ${fish.name}! +200 gold!`,
+                itemId: fish.itemId,
+                icon: fish.icon,
+              });
+            } else if (addToInventory(currentPlayer, fish.itemId, 1)) {
+              client.send("fish_result", { 
+                success: true, 
+                message: `You caught a ${fish.icon} ${fish.name}!`,
+                itemId: fish.itemId,
+                icon: fish.icon,
+              });
+            } else {
+              client.send("fish_result", { success: false, message: "You caught something but your inventory is full!" });
+            }
+            // Give small XP for fishing
+            currentPlayer.xp += 10;
+            checkLevelUp(currentPlayer, this, client.sessionId);
+            caught = true;
+            break;
+          }
+        }
+        if (!caught) {
+          client.send("fish_result", { success: false, message: "The fish got away..." });
+        }
+      }, duration);
+    });
+    
+    this.onMessage("fish_cancel", (client) => {
+      fishingPlayers.delete(client.sessionId);
     });
 
     // ── Heal spell ──

@@ -2,6 +2,32 @@
 
 ## Features Added
 
+### 15. 🎣 Fishing System
+- Press **F** near water to cast your line
+- Animated fishing progress bar with bobber and water shimmer
+- **4 catches**: 🐟 Small Fish (common), 🐠 Big Fish (uncommon), ✨🐟 Golden Fish (rare), 🧰 Sunken Treasure (legendary)
+- Fish are consumable: Small Fish heals 20 HP, Big Fish heals 60 HP, Golden Fish heals 100 HP + 50 MP
+- Sunken Treasure gives 200 gold on catch
+- +10 XP per successful catch
+- Moving cancels your cast — stay still!
+- Sell fish to the merchant for gold
+
+### 14. 💎 Ground Loot Drops
+- Monsters now drop items **on the ground** when killed instead of auto-looting
+- Dropped items render with **glowing halos** — gold glow for coins, blue for equipment, green for consumables
+- Items bob up and down with a floating animation
+- **Click** dropped items or **walk over** them to pick up (auto-pickup)
+- **Loot protection**: Only the killer can loot for 5 seconds, then it's free for all
+- Items despawn after 60 seconds if not picked up
+- Gold drops as visible 🪙 coins with quantity labels
+
+### 13. 🔧 Quest System Fix — NPC Dialog & Markers
+- **Fixed**: Merchant NPC now properly shows quest dialog (Dragon Slayer quest was inaccessible)
+- **Fixed**: All NPCs send `npc_talk` for quest checking; merchant also opens shop
+- **Server-driven quest markers**: `!` and `?` markers above NPCs now accurately reflect available/turn-in quests based on player level, prerequisites, and active quests
+- Markers update in real-time when quests are accepted, completed, or turned in
+- No more false `!` markers on NPCs with no available quests
+
 ### 12. 📜 Quest System
 - **7 quests** across 5 NPCs with kill objectives and progression chains
   - **Elder Oak**: Slime Trouble (5 slimes) → Wolf Menace (3 wolves)

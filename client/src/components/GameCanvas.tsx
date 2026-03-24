@@ -136,6 +136,10 @@ const ITEMS: Record<string, { name: string; icon: string; buyPrice: number; sell
   iron_legs: { name: "Iron Greaves", icon: "🦿", buyPrice: 0, sellPrice: 120, equipSlot: "legs", equipBonus: { def: 8, maxHp: 30 } },
   sandals: { name: "Traveler's Sandals", icon: "👡", buyPrice: 60, sellPrice: 20, equipSlot: "boots", equipBonus: { def: 2 } },
   iron_boots: { name: "Iron Boots", icon: "🥾", buyPrice: 0, sellPrice: 80, equipSlot: "boots", equipBonus: { def: 5, maxHp: 15 } },
+  small_fish: { name: "Small Fish", icon: "🐟", buyPrice: 0, sellPrice: 10, effect: { hp: 20 } },
+  big_fish: { name: "Big Fish", icon: "🐠", buyPrice: 0, sellPrice: 30, effect: { hp: 60 } },
+  golden_fish: { name: "Golden Fish", icon: "✨🐟", buyPrice: 0, sellPrice: 100, effect: { hp: 100, mp: 50 } },
+  treasure_chest: { name: "Sunken Treasure", icon: "🧰", buyPrice: 0, sellPrice: 200 },
 };
 const SHOP_ITEMS = ["health_potion", "mana_potion", "wooden_sword", "leather_helmet", "leather_chest", "leather_legs", "sandals"];
 
@@ -161,6 +165,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const bossesRef = useRef<Map<string, BossData>>(new Map());
   const droppedItemsRef = useRef<Map<string, { id: string; itemId: string; quantity: number; x: number; y: number; droppedAt: number }>>(new Map());
   const lastAutoPickupRef = useRef(0);
+  const fishingRef = useRef<{ active: boolean; castTime: number; duration: number; result: string | null; resultTime: number }>({ active: false, castTime: 0, duration: 0, result: null, resultTime: 0 });
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
   const [connected, setConnected] = useState(false);
@@ -780,6 +785,20 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         questNotifRef.current.push({ text: `❌ ${data.message}`, time: now, color: "#e74c3c" });
       });
 
+      // ── Fishing messages ──
+      room.onMessage("fish_cast", (data: { duration: number }) => {
+        fishingRef.current = { active: true, castTime: performance.now(), duration: data.duration, result: null, resultTime: 0 };
+      });
+      room.onMessage("fish_result", (data: { success: boolean; message: string; icon?: string }) => {
+        fishingRef.current.active = false;
+        fishingRef.current.result = data.message;
+        fishingRef.current.resultTime = performance.now();
+        if (data.success) sfxLoot();
+      });
+      room.onMessage("fish_cancel_notify", () => {
+        fishingRef.current.active = false;
+      });
+
       room.onMessage("npc_quest_markers", (data: Record<string, string>) => {
         const markers = npcQuestMarkersRef.current;
         markers.clear();
@@ -1266,6 +1285,15 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
       if (e.key === "q" || e.key === "Q") { setQuestLogOpen(prev => !prev); return; }
+      if (e.key === "f" || e.key === "F") { 
+        if (fishingRef.current.active) {
+          roomRef.current?.send("fish_cancel");
+          fishingRef.current.active = false;
+        } else {
+          roomRef.current?.send("fish_start");
+        }
+        return;
+      }
       if (e.key === "m" || e.key === "M") { setSoundMuted(toggleMute()); return; }
       if (e.key === "e" || e.key === "E") { talkToNearbyNPC(); return; }
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
@@ -2379,6 +2407,72 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillText(qn.text, w - 12, h / 2 - 60 - i * 22);
         ctx.restore();
       });
+
+      /* ── Fishing UI ──── */
+      const fish = fishingRef.current;
+      if (fish.active) {
+        const elapsed = now - fish.castTime;
+        const progress = Math.min(elapsed / fish.duration, 1);
+        const barW = 160, barH = 16;
+        const barX = w / 2 - barW / 2;
+        const barY = h / 2 + 60;
+        
+        // Background
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.strokeStyle = "rgba(100,180,255,0.8)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(barX - 10, barY - 28, barW + 20, barH + 44, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        // "Fishing..." text with animated dots
+        const dots = ".".repeat(Math.floor(time / 400) % 4);
+        ctx.font = "bold 14px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#7ec8e3";
+        ctx.fillText(`🎣 Fishing${dots}`, w / 2, barY - 8);
+        
+        // Progress bar background
+        ctx.fillStyle = "rgba(50,80,120,0.6)";
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW, barH, 4);
+        ctx.fill();
+        
+        // Progress bar fill (water-blue with shimmer)
+        const shimmer = 0.8 + Math.sin(time / 150) * 0.2;
+        ctx.fillStyle = `rgba(${Math.floor(60 * shimmer)}, ${Math.floor(160 * shimmer)}, ${Math.floor(255 * shimmer)}, 0.9)`;
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW * progress, barH, 4);
+        ctx.fill();
+        
+        // Bobber icon at progress position
+        const bobberX = barX + barW * progress;
+        const bobberBob = Math.sin(time / 200) * 2;
+        ctx.font = "16px 'Segoe UI Emoji'";
+        ctx.textAlign = "center";
+        ctx.fillText("🎣", bobberX, barY + barH + 14 + bobberBob);
+        
+        ctx.restore();
+      }
+      
+      // Fishing result notification
+      if (fish.result && now - fish.resultTime < 3000) {
+        const age = now - fish.resultTime;
+        const alpha = age > 2500 ? (3000 - age) / 500 : Math.min(age / 200, 1);
+        const floatY = Math.min(age / 10, 20);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = "bold 15px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = fish.result.includes("got away") || fish.result.includes("full") || fish.result.includes("need to") ? "#e74c3c" : "#2ecc71";
+        ctx.strokeStyle = "rgba(0,0,0,0.6)";
+        ctx.lineWidth = 3;
+        ctx.strokeText(fish.result, w / 2, h / 2 + 40 - floatY);
+        ctx.fillText(fish.result, w / 2, h / 2 + 40 - floatY);
+        ctx.restore();
+      }
 
       /* ── HUD ─────────────────────────────────────────── */
 

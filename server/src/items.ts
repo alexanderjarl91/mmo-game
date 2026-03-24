@@ -197,6 +197,46 @@ export const ITEMS: Record<string, ItemDef> = {
     icon: "🥾",
     dropWeight: 10,
   },
+  // ── Fish ──
+  small_fish: {
+    id: "small_fish",
+    type: "consumable",
+    name: "Small Fish",
+    description: "A common freshwater fish. Restores 20 HP.",
+    stackable: true, maxStack: 20,
+    buyPrice: 0, sellPrice: 10,
+    effect: { hp: 20 },
+    icon: "🐟",
+  },
+  big_fish: {
+    id: "big_fish",
+    type: "consumable",
+    name: "Big Fish",
+    description: "A hefty catch! Restores 60 HP.",
+    stackable: true, maxStack: 20,
+    buyPrice: 0, sellPrice: 30,
+    effect: { hp: 60 },
+    icon: "🐠",
+  },
+  golden_fish: {
+    id: "golden_fish",
+    type: "consumable",
+    name: "Golden Fish",
+    description: "A legendary catch that glimmers with magic. Restores 100 HP and 50 MP.",
+    stackable: true, maxStack: 10,
+    buyPrice: 0, sellPrice: 100,
+    effect: { hp: 100, mp: 50 },
+    icon: "✨🐟",
+  },
+  treasure_chest: {
+    id: "treasure_chest",
+    type: "material",
+    name: "Sunken Treasure",
+    description: "A waterlogged chest containing 200 gold!",
+    stackable: true, maxStack: 5,
+    buyPrice: 0, sellPrice: 200,
+    icon: "🧰",
+  },
 };
 
 export const SHOP_ITEMS = ["health_potion", "mana_potion", "wooden_sword", "leather_helmet", "leather_chest", "leather_legs", "sandals"];
