@@ -168,6 +168,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const worldEventNotifsRef = useRef<Array<{ message: string; time: number; color: string }>>([]);
   const lastAutoPickupRef = useRef(0);
   const lootWalkTargetRef = useRef<{ dropId: string; tileX: number; tileY: number } | null>(null);
+  const clickWalkTargetRef = useRef<{ tileX: number; tileY: number } | null>(null);
+  const clickWalkStuckRef = useRef<{ lastTileX: number; lastTileY: number; count: number }>({ lastTileX: -1, lastTileY: -1, count: 0 });
   const fishingRef = useRef<{ active: boolean; castTime: number; duration: number; result: string | null; resultTime: number }>({ active: false, castTime: 0, duration: 0, result: null, resultTime: 0 });
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
@@ -1341,6 +1343,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
     if (closestDropId && closestDropDist < bestDist) {
       const drop = droppedItemsRef.current.get(closestDropId);
       if (drop) {
+        clickWalkTargetRef.current = null; // Cancel any click-walk
         const myTileX = Math.round(me.serverX / TILE_SIZE);
         const myTileY = Math.round(me.serverY / TILE_SIZE);
         const dropTileX = Math.round(drop.x / TILE_SIZE);
@@ -1361,6 +1364,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
 
     if (bestId) {
       lootWalkTargetRef.current = null; // Cancel any loot-walk
+      clickWalkTargetRef.current = null; // Cancel any click-walk
       // If clicking the same target, toggle it off
       const currentTarget = me.targetId || "";
       if (currentTarget === bestId) {
@@ -1371,6 +1375,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
     } else {
       lootWalkTargetRef.current = null;
       sendClearTarget();
+      // Click-to-walk: set walk target to the clicked tile
+      const clickedTileX = Math.round(worldX / TILE_SIZE);
+      const clickedTileY = Math.round(worldY / TILE_SIZE);
+      const myTileX = Math.round(me.serverX / TILE_SIZE);
+      const myTileY = Math.round(me.serverY / TILE_SIZE);
+      if (clickedTileX !== myTileX || clickedTileY !== myTileY) {
+        clickWalkTargetRef.current = { tileX: clickedTileX, tileY: clickedTileY };
+      }
     }
   }, []);
 
@@ -1569,8 +1581,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         else if (keys.has("a") || keys.has("ArrowLeft")) dx = -1;
         else if (keys.has("d") || keys.has("ArrowRight")) dx = 1;
         if (dx === 0 && dy === 0) { dx = dpadRef.current.dx; dy = dpadRef.current.dy; }
-        // Cancel loot-walk on manual input
-        if ((dx !== 0 || dy !== 0) && lootWalkTargetRef.current) { lootWalkTargetRef.current = null; }
+        // Cancel loot-walk and click-walk on manual input
+        if (dx !== 0 || dy !== 0) {
+          if (lootWalkTargetRef.current) lootWalkTargetRef.current = null;
+          if (clickWalkTargetRef.current) clickWalkTargetRef.current = null;
+        }
         // Auto-walk to loot target if no manual input
         if (dx === 0 && dy === 0 && lootWalkTargetRef.current) {
           const me = playersRef.current.get(sessionIdRef.current);
@@ -1596,6 +1611,52 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                 if (target.tileY > myTileY) dy = 1;
                 else if (target.tileY < myTileY) dy = -1;
                 // Move one axis at a time for reliability
+                if (dx !== 0 && dy !== 0) { dy = 0; }
+              }
+            }
+          }
+        }
+        // Click-to-walk: step toward clicked tile if no manual or loot-walk input
+        if (dx === 0 && dy === 0 && clickWalkTargetRef.current) {
+          const me = playersRef.current.get(sessionIdRef.current);
+          if (me && me.hp > 0) {
+            const target = clickWalkTargetRef.current;
+            const myTileX = Math.round(me.serverX / TILE_SIZE);
+            const myTileY = Math.round(me.serverY / TILE_SIZE);
+            if (target.tileX === myTileX && target.tileY === myTileY) {
+              // Arrived at destination
+              clickWalkTargetRef.current = null;
+              clickWalkStuckRef.current = { lastTileX: -1, lastTileY: -1, count: 0 };
+            } else {
+              // Stuck detection: cancel if position hasn't changed for several ticks
+              const stuck = clickWalkStuckRef.current;
+              if (stuck.lastTileX === myTileX && stuck.lastTileY === myTileY) {
+                stuck.count++;
+                if (stuck.count > 3) {
+                  // Try the other axis first
+                  const altDx = target.tileX > myTileX ? 1 : target.tileX < myTileX ? -1 : 0;
+                  const altDy = target.tileY > myTileY ? 1 : target.tileY < myTileY ? -1 : 0;
+                  if (stuck.count <= 6 && (altDx !== 0 || altDy !== 0)) {
+                    // Try vertical first instead of horizontal (swap priority)
+                    if (altDy !== 0) { dy = altDy; dx = 0; }
+                    else { dx = altDx; dy = 0; }
+                  } else {
+                    // Truly stuck, cancel walk
+                    clickWalkTargetRef.current = null;
+                    clickWalkStuckRef.current = { lastTileX: -1, lastTileY: -1, count: 0 };
+                  }
+                }
+              } else {
+                stuck.lastTileX = myTileX;
+                stuck.lastTileY = myTileY;
+                stuck.count = 0;
+              }
+              if (clickWalkTargetRef.current && dx === 0 && dy === 0) {
+                if (target.tileX > myTileX) dx = 1;
+                else if (target.tileX < myTileX) dx = -1;
+                if (target.tileY > myTileY) dy = 1;
+                else if (target.tileY < myTileY) dy = -1;
+                // Move one axis at a time for clean movement
                 if (dx !== 0 && dy !== 0) { dy = 0; }
               }
             }
@@ -1747,6 +1808,19 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       ctx.strokeStyle = "rgba(0,0,0,0.04)"; ctx.lineWidth = 1;
       for (let x = -(camX % TILE_SIZE); x < w; x += TILE_SIZE) { const wx = x + camX; if (wx >= 0 && wx <= WORLD_W) { ctx.beginPath(); ctx.moveTo(x, Math.max(0, -camY)); ctx.lineTo(x, Math.min(h, WORLD_H - camY)); ctx.stroke(); } }
       for (let y = -(camY % TILE_SIZE); y < h; y += TILE_SIZE) { const wy = y + camY; if (wy >= 0 && wy <= WORLD_H) { ctx.beginPath(); ctx.moveTo(Math.max(0, -camX), y); ctx.lineTo(Math.min(w, WORLD_W - camX), y); ctx.stroke(); } }
+
+      // Click-to-walk destination marker
+      if (clickWalkTargetRef.current) {
+        const cwt = clickWalkTargetRef.current;
+        const markerX = cwt.tileX * TILE_SIZE - camX;
+        const markerY = cwt.tileY * TILE_SIZE - camY;
+        const pulse = 0.3 + Math.sin(time / 300) * 0.15;
+        ctx.fillStyle = `rgba(100, 200, 255, ${pulse})`;
+        ctx.fillRect(markerX, markerY, TILE_SIZE, TILE_SIZE);
+        ctx.strokeStyle = `rgba(100, 200, 255, ${pulse + 0.2})`;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(markerX + 1, markerY + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      }
 
       /* ── Slimes ──────────────────────────────────────── */
 

@@ -1,5 +1,13 @@
 # 🎮 Creative Sprint Changelog
 
+## Click-to-Walk Movement
+- Click any empty tile on the map to walk the player there automatically
+- Blue pulsing highlight shows the destination tile while walking
+- Steps toward the target one tile at a time using the existing move system
+- Cancels automatically when pressing WASD/arrow keys, clicking a creature/item, or using the d-pad
+- Stuck detection: if the player can't progress (blocked by wall/mob), tries alternate axis then cancels after several failed attempts
+- Works alongside existing loot-walk (click item to walk and pick up) — loot-walk takes priority
+
 ## Cleanup — Removed Day/Night Cycle & Kill Streaks
 
 ### 🌞 Removed Day/Night Cycle
