@@ -188,8 +188,8 @@ function recalcEquipBonuses(player: PlayerState) {
   player.dodgeChance = cfg.dodgeBase + (level - 1) * cfg.dodgePerLevel;
   player.mpRegen = cfg.mpRegenBase + (level - 1) * cfg.mpRegenPerLevel;
   player.attackInterval = cfg.attackInterval;
-  const newMaxHp = cfg.hpBase + (level - 1) * cfg.hpPerLevel + bonusMaxHp;
-  const newMaxMp = cfg.mpBase + (level - 1) * cfg.mpPerLevel + bonusMaxMp;
+  const newMaxHp = Math.floor(cfg.hpBase + (level - 1) * cfg.hpPerLevel + bonusMaxHp);
+  const newMaxMp = Math.floor(cfg.mpBase + (level - 1) * cfg.mpPerLevel + bonusMaxMp);
   // Don't let current HP/MP exceed new max
   player.maxHp = newMaxHp;
   player.maxMp = newMaxMp;
@@ -1775,8 +1775,8 @@ export class GameRoom extends Room<GameState> {
             const d = Math.max(Math.abs(px - etx), Math.abs(py - ety));
             if (d <= MANA_SHRINE_RANGE) {
               let healed = false;
-              if (p.hp < p.maxHp) { p.hp = Math.min(p.maxHp, p.hp + 10); healed = true; }
-              if (p.mp < p.maxMp) { p.mp = Math.min(p.maxMp, p.mp + 10); healed = true; }
+              if (p.hp < p.maxHp) { p.hp = Math.min(p.maxHp, Math.floor(p.hp + 10)); healed = true; }
+              if (p.mp < p.maxMp) { p.mp = Math.min(p.maxMp, Math.floor(p.mp + 10)); healed = true; }
               // Clear status effects near shrine
               if (p.statusEffect) { p.statusEffect = ""; p.statusEffectEnd = 0; healed = true; }
             }
@@ -1876,10 +1876,10 @@ export class GameRoom extends Room<GameState> {
         if (player.mp < player.maxMp) {
           // Class-based MP regen: mpRegen is per 5s, tick is every 2s, so per-tick = mpRegen / 2.5
           const mpRegenPerTick = player.mpRegen / 2.5;
-          player.mp = Math.min(player.maxMp, player.mp + mpRegenPerTick * regenMult);
+          player.mp = Math.min(player.maxMp, Math.floor(player.mp + mpRegenPerTick * regenMult));
         }
         if (onTemple && player.hp < player.maxHp) {
-          player.hp = Math.min(player.maxHp, player.hp + 5 * regenMult); // 50 HP/tick in temple
+          player.hp = Math.min(player.maxHp, Math.floor(player.hp + 5 * regenMult)); // 50 HP/tick in temple
         }
 
         // War Cry buff expiry

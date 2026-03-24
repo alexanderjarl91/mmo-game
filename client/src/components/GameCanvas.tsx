@@ -154,9 +154,9 @@ interface Projectile { fromX: number; fromY: number; toX: number; toY: number; t
 interface LevelUpEffect { sessionId: string; level: number; time: number; }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
 
-interface Props { playerName: string; playerClass: string; isHardcore: boolean; }
+interface Props { playerName: string; playerClass: string; isHardcore: boolean; onLogout: () => void; }
 
-export default function GameCanvas({ playerName, playerClass, isHardcore }: Props) {
+export default function GameCanvas({ playerName, playerClass, isHardcore, onLogout }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const roomRef = useRef<Room | null>(null);
   const playersRef = useRef<Map<string, PlayerData>>(new Map());
@@ -454,7 +454,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: slime.displayY,
             damage: data.damage,
             time: performance.now(),
-            color: critColor || slime.color,
+            color: critColor || "#e74c3c",
             prefix: critPrefix,
           });
           for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: slime.displayX + TILE_SIZE / 2, y: slime.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2, life: 15 + Math.random() * 10, maxLife: 25, color: slime.color, size: 2 }); }
@@ -467,7 +467,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: wolf.displayY,
             damage: data.damage,
             time: performance.now(),
-            color: critColor || "#ff6b6b",
+            color: critColor || "#e74c3c",
             prefix: critPrefix,
           });
           for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: wolf.displayX + TILE_SIZE / 2, y: wolf.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#cc3333", size: 2.5 }); }
@@ -476,7 +476,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const goblin = goblinsRef.current.get(data.targetId);
         if (goblin) {
           goblin.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now(), color: critColor || "#7dcea0", prefix: critPrefix });
+          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now(), color: critColor || "#e74c3c", prefix: critPrefix });
           // Hit particles
           for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#4a8c3f", size: 2 }); }
         }
@@ -484,7 +484,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const skel = skeletonsRef.current.get(data.targetId);
         if (skel) {
           skel.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: critColor || "#bdc3c7", prefix: critPrefix });
+          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: critColor || "#e74c3c", prefix: critPrefix });
           // Bone fragment particles
           for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2.5, life: 15 + Math.random() * 10, maxLife: 25, color: "#ecf0f1", size: 1.5 }); }
         }
@@ -492,7 +492,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const bossHit = bossesRef.current.get(data.targetId);
         if (bossHit) {
           bossHit.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: critColor || "#ff8800", prefix: critPrefix });
+          damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: critColor || "#e74c3c", prefix: critPrefix });
           for (let i = 0; i < 8; i++) { particlesRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, vx: (Math.random() - 0.5) * 5, vy: -Math.random() * 3, life: 25 + Math.random() * 15, maxLife: 40, color: Math.random() > 0.5 ? "#ff4400" : "#ffcc00", size: 3 }); }
         }
         // Player hit (by wolf or other mob) — dodge or damage
@@ -1575,7 +1575,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     const bx = x - w / 2, by = y;
     ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(bx - 1, by - 1, w + 2, h + 2);
     ctx.fillStyle = "#333"; ctx.fillRect(bx, by, w, h);
-    const pct = Math.max(0, hp / maxHp);
+    const pct = Math.max(0, Math.floor(hp) / Math.floor(maxHp));
     const color = pct > 0.5 ? "#2ecc71" : pct > 0.25 ? "#f39c12" : "#e74c3c";
     ctx.fillStyle = color; ctx.fillRect(bx, by, w * pct, h);
   };
@@ -2172,7 +2172,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillStyle = hpCol; ctx.fillRect(bossHpX, bossHpY, bossHpW * hpRatio, bossHpH);
         // HP text
         ctx.font = "bold 9px 'Segoe UI', sans-serif";
-        ctx.fillStyle = "#fff"; ctx.fillText(`${b.hp}/${b.maxHp}`, bx, bossHpY + bossHpH - 1);
+        ctx.fillStyle = "#fff"; ctx.fillText(`${Math.floor(b.hp)}/${Math.floor(b.maxHp)}`, bx, bossHpY + bossHpH - 1);
       });
 
       /* ── Ground Items (dropped loot) ────────────────── */
@@ -2348,7 +2348,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             ctx.fillStyle = "#ffd700"; ctx.fillRect(hpX, hpY, hpW * ratio, hpH);
             ctx.font = "bold 8px 'Segoe UI', sans-serif";
             ctx.fillStyle = "#fff"; ctx.textAlign = "center";
-            ctx.fillText(`${evt.hp}/${evt.maxHp}`, ex, hpY + hpH + 9);
+            ctx.fillText(`${Math.floor(evt.hp)}/${Math.floor(evt.maxHp)}`, ex, hpY + hpH + 9);
           }
 
           // Timer
@@ -2661,26 +2661,37 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       for (const dmg of damageNumbersRef.current) {
         const progress = (now - dmg.time) / DAMAGE_DURATION;
         const alpha = progress > 0.6 ? (1 - progress) / 0.4 : 1;
-        // Bounce: starts fast, slows down
-        const bounce = progress < 0.15 ? -Math.sin(progress / 0.15 * Math.PI) * 8 : 0;
-        const floatY = dmg.y - camY - progress * 45 + bounce;
-        // Scale for big hits and crits
+        // Determine hit type
         const isCritHit = dmg.prefix?.startsWith("CRIT");
-        const isBigHit = dmg.damage >= 30 || isCritHit;
-        const sizeBoost = isCritHit ? Math.max(1, 1.8 - progress) : (isBigHit ? Math.max(1, 1.5 - progress) : 1);
-        const fontSize = Math.round((isCritHit ? 26 : isBigHit ? 22 : 16) * sizeBoost);
+        const isSpellOrAbility = dmg.prefix && !isCritHit && dmg.damage === 0; // ability text like "Shield Wall!", "War Cry!", etc.
+        const isSpecialDmg = dmg.prefix && !isCritHit; // spell damage with emoji prefix (cleave, rain of arrows, etc.)
+        const isRegularHit = !isCritHit && !isSpellOrAbility && !isSpecialDmg;
+        // Regular hits: small, no scaling, no bounce. Crits/spells: big, scaling, bounce.
+        const bounce = isRegularHit ? 0 : (progress < 0.15 ? -Math.sin(progress / 0.15 * Math.PI) * 8 : 0);
+        const floatY = dmg.y - camY - progress * 45 + bounce;
+        let fontSize: number;
+        if (isRegularHit) {
+          fontSize = 12; // small fixed size for regular physical hits
+        } else if (isCritHit) {
+          const sizeBoost = Math.max(1, 1.8 - progress);
+          fontSize = Math.round(26 * sizeBoost);
+        } else {
+          const isBigHit = dmg.damage >= 30;
+          const sizeBoost = isBigHit ? Math.max(1, 1.5 - progress) : 1;
+          fontSize = Math.round((isBigHit ? 22 : 16) * sizeBoost);
+        }
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.font = `bold ${fontSize}px 'Segoe UI', sans-serif`;
         ctx.textAlign = "center";
-        const dmgText = dmg.damage > 0 ? `${dmg.prefix || "-"}${dmg.damage}` : (dmg.prefix || "");
+        const dmgText = dmg.damage > 0 ? `${dmg.prefix || "-"}${Math.floor(dmg.damage)}` : (dmg.prefix || "");
         // Shadow for readability
         ctx.fillStyle = "rgba(0,0,0,0.6)";
         ctx.fillText(dmgText, dmg.x - camX + 1, floatY + 1);
         ctx.fillStyle = dmg.color || "#e74c3c";
         ctx.fillText(dmgText, dmg.x - camX, floatY);
-        // Extra glow for big hits
-        if (isBigHit && progress < 0.3) {
+        // Extra glow for crits and spells
+        if (!isRegularHit && (isCritHit || (dmg.damage >= 30)) && progress < 0.3) {
           ctx.globalAlpha = alpha * 0.3;
           ctx.font = `bold ${fontSize + 4}px 'Segoe UI', sans-serif`;
           ctx.fillStyle = "#fff";
@@ -3042,7 +3053,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.fillText(`HP`, 10, barY);
           drawHPBar(ctx, 95, barY - 5, me.hp, me.maxHp, 120);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`${me.hp}/${me.maxHp}`, 165, barY);
+          ctx.fillText(`${Math.floor(me.hp)}/${Math.floor(me.maxHp)}`, 165, barY);
 
           // MP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#7ec8e3"; ctx.textAlign = "left";
@@ -3050,9 +3061,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           // Mana bar (same width as HP bar)
           ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(34, barY + 8, 122, 7);
           ctx.fillStyle = "#1a1a2e"; ctx.fillRect(35, barY + 9, 120, 5);
-          ctx.fillStyle = "#3498db"; ctx.fillRect(35, barY + 9, 120 * (me.mp / (me.maxMp || 1)), 5);
+          ctx.fillStyle = "#3498db"; ctx.fillRect(35, barY + 9, 120 * (Math.floor(me.mp) / (Math.floor(me.maxMp) || 1)), 5);
           ctx.font = "10px monospace"; ctx.fillStyle = "#ccc";
-          ctx.fillText(`${me.mp}/${me.maxMp}`, 165, barY + 16);
+          ctx.fillText(`${Math.floor(me.mp)}/${Math.floor(me.maxMp)}`, 165, barY + 16);
 
           // XP
           ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.fillStyle = "#fff";
@@ -3524,7 +3535,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         <div style={{ position: "absolute", top: 8, left: 8, right: 8, background: "rgba(0,0,0,0.7)", borderRadius: 8, padding: "8px 12px", zIndex: 10, color: "#fff", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <span>{myStats.playerClass === "ranger" ? "🏹" : "⚔️"} Lv.{myStats.level}</span>
-            <span>❤️ {myStats.hp}/{myStats.maxHp}</span>
+            <span>❤️ {Math.floor(myStats.hp)}/{Math.floor(myStats.maxHp)}</span>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <span style={{ color: "#f1c40f", fontWeight: "bold", fontSize: 13 }}>💰 {myStats.gold}</span>
@@ -3847,13 +3858,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
                 <div style={{ background: "rgba(231,76,60,0.1)", border: "1px solid rgba(231,76,60,0.3)", borderRadius: 6, padding: "8px 12px" }}>
                   <div style={{ color: "#e74c3c", fontSize: 10 }}>❤️ HP</div>
-                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{me.hp} / {me.maxHp}</div>
-                  <div style={{ color: "#888", fontSize: 9 }}>Base {baseMaxHp} + Equip {totalMaxHp}</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{Math.floor(me.hp)} / {Math.floor(me.maxHp)}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>Base {Math.floor(baseMaxHp)} + Equip {totalMaxHp}</div>
                 </div>
                 <div style={{ background: "rgba(52,152,219,0.1)", border: "1px solid rgba(52,152,219,0.3)", borderRadius: 6, padding: "8px 12px" }}>
                   <div style={{ color: "#3498db", fontSize: 10 }}>💙 MP</div>
-                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{me.mp} / {me.maxMp}</div>
-                  <div style={{ color: "#888", fontSize: 9 }}>Base {baseMaxMp} + Equip {totalMaxMp}</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{Math.floor(me.mp)} / {Math.floor(me.maxMp)}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>Base {Math.floor(baseMaxMp)} + Equip {totalMaxMp}</div>
                 </div>
               </div>
 
@@ -4129,8 +4140,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               <span style={{ marginLeft: "auto", color: "#444", fontSize: 10 }}>Coming Soon</span>
             </button>
 
+            {/* Logout */}
+            <button onClick={() => { setMenuOpen(false); roomRef.current?.leave(); onLogout(); }} style={{
+              display: "flex", alignItems: "center", gap: 12, width: "100%",
+              padding: "12px 16px", marginBottom: 8, marginTop: 12, borderRadius: 8,
+              background: "rgba(231,76,60,0.15)", border: "1px solid rgba(231,76,60,0.4)",
+              color: "#e74c3c", cursor: "pointer", fontSize: 15, fontWeight: "bold",
+              transition: "background 0.15s",
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = "rgba(231,76,60,0.3)"}
+            onMouseOut={(e) => e.currentTarget.style.background = "rgba(231,76,60,0.15)"}
+            >
+              <span style={{ fontSize: 20 }}>🚪</span> Logout
+            </button>
+
             <button onClick={() => setMenuOpen(false)} style={{
-              marginTop: 10, width: "100%", padding: "8px", borderRadius: 6,
+              marginTop: 4, width: "100%", padding: "8px", borderRadius: 6,
               border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
               color: "#94a3b8", cursor: "pointer", fontSize: 12,
             }}>Close (Esc)</button>

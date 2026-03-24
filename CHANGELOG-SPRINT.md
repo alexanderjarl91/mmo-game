@@ -1,5 +1,25 @@
 # 🎮 Creative Sprint Changelog
 
+## UI Polish & QoL Fixes
+
+### 🔢 No Decimals in HP/MP
+- Server: `Math.floor()` applied to maxHp/maxMp calculations in `recalcEquipBonuses`, MP regen ticks, temple regen, and mana shrine healing
+- Client: All HP/MP text displays (HUD bars, character sheet, mobile HUD, boss HP, world event HP, damage/heal floating numbers) now use `Math.floor()` — no more "45.6 / 100.0"
+
+### 🔴 Red Physical Damage Numbers
+- All basic physical attack damage (melee, bow, etc.) now displays in **red** (#e74c3c) instead of per-monster colors
+- Crits remain gold, spell/ability effects keep their unique colors (green heals, blue mana, orange cleave, etc.)
+
+### 📏 Smaller Regular Damage Numbers
+- Regular (non-crit, non-spell) damage numbers are now **smaller** (12px) and don't scale up as they float
+- Crits and spell damage retain their larger, scaling, bouncing animation
+- Reduces visual clutter during normal combat while keeping impactful hits visually distinct
+
+### 🚪 Logout Button in Esc Menu
+- Added a **Logout** button at the bottom of the game menu (Esc)
+- Red-styled to distinguish from other options
+- Disconnects from server and returns to character select/login screen
+
 ## Class System Overhaul — 4 Classes with Distinct Progression
 
 ### 🗡️ 4-Class System with Unique Stats

@@ -9,5 +9,5 @@ export default function App() {
     return <LoginScreen onPlay={(name, playerClass, isHardcore) => setPlayer({ name, playerClass, isHardcore })} />;
   }
 
-  return <GameCanvas playerName={player.name} playerClass={player.playerClass} isHardcore={player.isHardcore} />;
+  return <GameCanvas playerName={player.name} playerClass={player.playerClass} isHardcore={player.isHardcore} onLogout={() => setPlayer(null)} />;
 }
