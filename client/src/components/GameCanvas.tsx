@@ -30,6 +30,8 @@ interface PlayerData {
   defense: number;
   statusEffect: string;
   statusEffectEnd: number;
+  killStreak: number;
+  bestKillStreak: number;
 }
 
 interface SlimeData {
@@ -166,6 +168,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const droppedItemsRef = useRef<Map<string, { id: string; itemId: string; quantity: number; x: number; y: number; droppedAt: number }>>(new Map());
   const worldEventsRef = useRef<Map<string, { id: string; eventType: string; x: number; y: number; spawnedAt: number; expiresAt: number; active: boolean; hp: number; maxHp: number }>>(new Map());
   const worldEventNotifsRef = useRef<Array<{ message: string; time: number; color: string }>>([]);
+  const streakBannerRef = useRef<{ title: string; name: string; streak: number; time: number; xpBonus: number; goldBonus: number; isMine: boolean } | null>(null);
   const lastAutoPickupRef = useRef(0);
   const fishingRef = useRef<{ active: boolean; castTime: number; duration: number; result: string | null; resultTime: number }>({ active: false, castTime: 0, duration: 0, result: null, resultTime: 0 });
   const sessionIdRef = useRef("");
@@ -842,6 +845,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           defense: player.defense || 0,
           statusEffect: player.statusEffect || "",
           statusEffectEnd: player.statusEffectEnd || 0,
+          killStreak: player.killStreak || 0,
+          bestKillStreak: player.bestKillStreak || 0,
         };
         // Sync inventory
         if (player.inventory) {
@@ -889,6 +894,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           p.defense = player.defense || 0;
           p.statusEffect = player.statusEffect || "";
           p.statusEffectEnd = player.statusEffectEnd || 0;
+          p.killStreak = player.killStreak || 0;
+          p.bestKillStreak = player.bestKillStreak || 0;
           // Track death moment
           if (player.hp <= 0 && p.deathTime === 0) {
             p.deathTime = performance.now();
@@ -1152,6 +1159,29 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
       room.onMessage("boss_warning", (data: { message: string }) => {
         killFeedRef.current.push({ text: data.message, time: performance.now() });
+      });
+
+      // Kill streak announcements
+      room.onMessage("kill_streak", (data: { sessionId: string; name: string; streak: number; title: string; xpBonus: number; goldBonus: number }) => {
+        streakBannerRef.current = {
+          title: data.title,
+          name: data.name,
+          streak: data.streak,
+          time: performance.now(),
+          xpBonus: data.xpBonus,
+          goldBonus: data.goldBonus,
+          isMine: data.sessionId === sessionIdRef.current,
+        };
+        killFeedRef.current.push({ text: `${data.title} ${data.name} — ${data.streak} kills! (+${data.xpBonus} XP, +${data.goldBonus} gold)`, time: performance.now() });
+        if (killFeedRef.current.length > 8) killFeedRef.current.shift();
+        // Camera shake on big streaks
+        if (data.sessionId === sessionIdRef.current && data.streak >= 5) {
+          cameraShakeRef.current = { intensity: Math.min(data.streak * 1.5, 15), time: performance.now() };
+        }
+      });
+      room.onMessage("streak_ended", (data: { name: string; streak: number }) => {
+        killFeedRef.current.push({ text: `💀 ${data.name}'s ${data.streak}-kill streak was ended!`, time: performance.now() });
+        if (killFeedRef.current.length > 8) killFeedRef.current.shift();
       });
       room.onMessage("boss_aoe", (data: { bossId: string; x: number; y: number; range: number }) => {
         // Spawn lots of fire particles for the AOE
@@ -2348,6 +2378,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.restore();
         }
 
+        // Kill streak indicator above name
+        if (p.killStreak >= 3) {
+          const streakAlpha = 0.7 + Math.sin(time / 200) * 0.3;
+          ctx.save(); ctx.globalAlpha = streakAlpha;
+          ctx.font = "bold 10px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+          const streakColor = p.killStreak >= 12 ? "#ff00ff" : p.killStreak >= 8 ? "#ff0000" : p.killStreak >= 5 ? "#ff6600" : "#ff9900";
+          ctx.fillStyle = streakColor;
+          ctx.fillText(`🔥 ${p.killStreak} kills`, px, py - 66);
+          ctx.restore();
+        }
+
         // Name above HP bar
         const nameStr = p.level > 1 ? `${p.name} [${p.level}]` : p.name;
         ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
@@ -2680,6 +2721,58 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillText(text, w / 2, bannerY + 19);
         ctx.restore();
       });
+
+      /* ── Kill Streak Banner (dramatic center screen) ──── */
+      const streakBanner = streakBannerRef.current;
+      if (streakBanner) {
+        const age = now - streakBanner.time;
+        if (age > 3500) {
+          streakBannerRef.current = null;
+        } else {
+          const fadeIn = Math.min(age / 200, 1);
+          const fadeOut = age > 3000 ? (3500 - age) / 500 : 1;
+          const alpha = fadeIn * fadeOut;
+          const scale = age < 300 ? 0.5 + (age / 300) * 0.5 : 1;
+          const slideY = age < 300 ? -20 * (1 - age / 300) : 0;
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+
+          // Banner position
+          const bannerY = h * 0.25 + slideY;
+
+          // Title text (large, colored by streak level)
+          const colors = ["#ff6600", "#ff3300", "#ff0000", "#ff00ff", "#ffd700"];
+          const colorIdx = Math.min(Math.floor((streakBanner.streak - 3) / 3), colors.length - 1);
+          const streakColor = colors[colorIdx];
+
+          // Glow effect
+          ctx.shadowColor = streakColor;
+          ctx.shadowBlur = 20 + Math.sin(now / 100) * 5;
+
+          ctx.font = `bold ${Math.floor(28 * scale)}px 'Segoe UI', sans-serif`;
+          ctx.textAlign = "center";
+
+          // Title
+          ctx.fillStyle = "#000";
+          ctx.fillText(streakBanner.title, w / 2 + 2, bannerY + 2);
+          ctx.fillStyle = streakColor;
+          ctx.fillText(streakBanner.title, w / 2, bannerY);
+
+          // Name and bonus
+          ctx.shadowBlur = 0;
+          ctx.font = `bold ${Math.floor(16 * scale)}px 'Segoe UI', sans-serif`;
+          const subtitle = streakBanner.isMine
+            ? `${streakBanner.streak} kills! +${streakBanner.xpBonus} XP, +${streakBanner.goldBonus} gold`
+            : `${streakBanner.name} — ${streakBanner.streak} kills!`;
+          ctx.fillStyle = "#000";
+          ctx.fillText(subtitle, w / 2 + 1, bannerY + 26);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(subtitle, w / 2, bannerY + 25);
+
+          ctx.restore();
+        }
+      }
 
       /* ── Fishing UI ──── */
       const fish = fishingRef.current;

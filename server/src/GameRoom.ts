@@ -363,6 +363,15 @@ const XP_ORB_XP = 150;
 const MANA_SHRINE_RANGE = 2; // tiles — heals players within range
 let worldEventCounter = 0;
 
+// Kill streak thresholds
+const STREAK_MILESTONES: Array<{ kills: number; title: string; xpBonus: number; goldBonus: number }> = [
+  { kills: 3, title: "🔥 Killing Spree", xpBonus: 25, goldBonus: 10 },
+  { kills: 5, title: "⚡ Rampage", xpBonus: 50, goldBonus: 25 },
+  { kills: 8, title: "💀 Unstoppable", xpBonus: 100, goldBonus: 50 },
+  { kills: 12, title: "☠️ Godlike", xpBonus: 200, goldBonus: 100 },
+  { kills: 20, title: "👑 Legendary", xpBonus: 500, goldBonus: 250 },
+];
+
 const SLIME_TYPES = [
   { color: "#2ecc71", size: "small", hp: 30, xp: 15, name: "Green Slime" },
   { color: "#3498db", size: "normal", hp: 50, xp: 25, name: "Blue Slime" },
@@ -584,6 +593,29 @@ export class GameRoom extends Room<GameState> {
     if (monsterType) {
       updateQuestProgress(player, monsterType, this, data.killerId);
     }
+
+    // Kill streak tracking
+    player.killStreak++;
+    if (player.killStreak > player.bestKillStreak) {
+      player.bestKillStreak = player.killStreak;
+    }
+    // Check for milestone
+    for (const ms of STREAK_MILESTONES) {
+      if (player.killStreak === ms.kills) {
+        player.xp += ms.xpBonus;
+        player.gold += ms.goldBonus;
+        checkLevelUp(player, this, data.killerId);
+        this.broadcast("kill_streak", {
+          sessionId: data.killerId,
+          name: player.name,
+          streak: player.killStreak,
+          title: ms.title,
+          xpBonus: ms.xpBonus,
+          goldBonus: ms.goldBonus,
+        });
+        break;
+      }
+    }
   }
 
   isTileOccupiedByPlayer(newX: number, newY: number, excludeSessionId: string): boolean {
@@ -641,6 +673,14 @@ export class GameRoom extends Room<GameState> {
     player.targetId = "";
     player.statusEffect = "";
     player.statusEffectEnd = 0;
+    // Reset kill streak on death
+    if (player.killStreak >= 3) {
+      this.broadcast("streak_ended", {
+        name: player.name,
+        streak: player.killStreak,
+      });
+    }
+    player.killStreak = 0;
   }
 
   // Perform one attack from player against their target
