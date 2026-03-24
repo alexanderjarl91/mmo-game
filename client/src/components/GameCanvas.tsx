@@ -164,6 +164,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const skeletonsRef = useRef<Map<string, SkeletonData>>(new Map());
   const bossesRef = useRef<Map<string, BossData>>(new Map());
   const droppedItemsRef = useRef<Map<string, { id: string; itemId: string; quantity: number; x: number; y: number; droppedAt: number }>>(new Map());
+  const worldEventsRef = useRef<Map<string, { id: string; eventType: string; x: number; y: number; spawnedAt: number; expiresAt: number; active: boolean; hp: number; maxHp: number }>>(new Map());
+  const worldEventNotifsRef = useRef<Array<{ message: string; time: number; color: string }>>([]);
   const lastAutoPickupRef = useRef(0);
   const fishingRef = useRef<{ active: boolean; castTime: number; duration: number; result: string | null; resultTime: number }>({ active: false, castTime: 0, duration: 0, result: null, resultTime: 0 });
   const sessionIdRef = useRef("");
@@ -1108,6 +1110,36 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
       room.state.droppedItems.onRemove((_: any, id: string) => { droppedItemsRef.current.delete(id); });
 
+      // World events
+      room.state.worldEvents.onAdd((evt: any, id: string) => {
+        worldEventsRef.current.set(id, {
+          id, eventType: evt.eventType, x: evt.x, y: evt.y,
+          spawnedAt: evt.spawnedAt, expiresAt: evt.expiresAt,
+          active: evt.active, hp: evt.hp, maxHp: evt.maxHp,
+        });
+        evt.onChange(() => {
+          const e = worldEventsRef.current.get(id);
+          if (e) {
+            e.x = evt.x; e.y = evt.y; e.active = evt.active;
+            e.hp = evt.hp; e.maxHp = evt.maxHp;
+            e.expiresAt = evt.expiresAt;
+          }
+        });
+      });
+      room.state.worldEvents.onRemove((_: any, id: string) => { worldEventsRef.current.delete(id); });
+
+      // World event messages
+      room.onMessage("world_event_spawn", (data: { id: string; eventType: string; message: string; duration: number }) => {
+        worldEventNotifsRef.current.push({ message: data.message, time: performance.now(), color: data.eventType === "golden_slime" ? "#ffd700" : data.eventType === "treasure_chest" ? "#f39c12" : data.eventType === "xp_orb" ? "#9b59b6" : "#3498db" });
+      });
+      room.onMessage("world_event_end", (data: { id: string; eventType: string; message: string }) => {
+        worldEventNotifsRef.current.push({ message: data.message, time: performance.now(), color: "#e74c3c" });
+      });
+      room.onMessage("event_reward", (data: { eventType: string; message: string }) => {
+        worldEventNotifsRef.current.push({ message: data.message, time: performance.now(), color: "#2ecc71" });
+        sfxLoot();
+      });
+
       // Boss event messages
       room.onMessage("boss_spawn", (data: { bossId: string; bossType: string }) => {
         killFeedRef.current.push({ text: `🐉 A ${data.bossType === "dragon" ? "Dragon" : "Boss"} has appeared!`, time: performance.now() });
@@ -1219,6 +1251,26 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const py = p.displayY + TILE_SIZE / 2;
       const d = Math.sqrt((worldX - px) ** 2 + (worldY - py) ** 2);
       if (d < TILE_SIZE && d < bestDist) { bestId = sid; bestDist = d; }
+    });
+
+    // Check world events (click to interact or target)
+    worldEventsRef.current.forEach((evt, id) => {
+      if (!evt.active) return;
+      const evx = evt.x + TILE_SIZE / 2;
+      const evy = evt.y + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - evx) ** 2 + (worldY - evy) ** 2);
+      if (d < TILE_SIZE * 1.2 && d < bestDist) {
+        if (evt.eventType === "golden_slime" && evt.hp > 0) {
+          // Target the golden slime for auto-attacks
+          bestId = id;
+          bestDist = d;
+        } else if (evt.eventType === "treasure_chest" || evt.eventType === "xp_orb") {
+          // Direct interaction
+          roomRef.current?.send("interact_event", { eventId: id });
+          return;
+        }
+        // Mana shrine doesn't need clicking — it's passive
+      }
     });
 
     // Check dropped items (click to pick up)
@@ -1463,6 +1515,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       killFeedRef.current = killFeedRef.current.filter(k => now - k.time < 5000);
       projectilesRef.current = projectilesRef.current.filter(p => now - p.time < 400);
       lootNotifRef.current = lootNotifRef.current.filter(l => now - l.time < 3000);
+      worldEventNotifsRef.current = worldEventNotifsRef.current.filter(n => now - n.time < 5000);
       levelUpEffectsRef.current = levelUpEffectsRef.current.filter(e => now - e.time < 2000);
       // Update particles
       particlesRef.current = particlesRef.current.filter(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life--; return p.life > 0; });
@@ -1495,6 +1548,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             roomRef.current?.send("pickup_item", { itemId: id });
           }
         });
+        // Also auto-interact with world events when walking over them
+        worldEventsRef.current.forEach((evt, id) => {
+          if (!evt.active) return;
+          if (evt.eventType !== "treasure_chest" && evt.eventType !== "xp_orb") return;
+          const ex = evt.x + TILE_SIZE / 2;
+          const ey = evt.y + TILE_SIZE / 2;
+          const d = Math.sqrt((px - ex) ** 2 + (py - ey) ** 2);
+          if (d < TILE_SIZE * 0.8) {
+            roomRef.current?.send("interact_event", { eventId: id });
+          }
+        });
+
         lastAutoPickupRef.current = now;
       }
 
@@ -1983,6 +2048,175 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.restore();
       });
 
+      /* ── World Events ──────────────────────────────────── */
+      worldEventsRef.current.forEach((evt) => {
+        if (!evt.active) return;
+        const ex = evt.x + TILE_SIZE / 2 - camX;
+        const ey = evt.y + TILE_SIZE / 2 - camY;
+        if (ex < -80 || ex > w + 80 || ey < -80 || ey > h + 80) return;
+
+        const bob = Math.sin(time / 300 + evt.x * 0.01) * 4;
+        const pulseAlpha = 0.4 + Math.sin(time / 400) * 0.2;
+        const timeLeft = Math.max(0, evt.expiresAt - Date.now());
+        const timerSec = Math.ceil(timeLeft / 1000);
+
+        ctx.save();
+
+        if (evt.eventType === "treasure_chest") {
+          // Glowing gold circle
+          const gradient = ctx.createRadialGradient(ex, ey + bob, 5, ex, ey + bob, 30);
+          gradient.addColorStop(0, `rgba(255, 215, 0, ${pulseAlpha})`);
+          gradient.addColorStop(1, "rgba(255, 215, 0, 0)");
+          ctx.fillStyle = gradient;
+          ctx.beginPath(); ctx.arc(ex, ey + bob, 30, 0, Math.PI * 2); ctx.fill();
+
+          // Chest icon
+          ctx.font = "28px 'Segoe UI Emoji', sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("💰", ex, ey + bob - 4);
+
+          // Timer
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = timerSec <= 10 ? "#ff4444" : "#ffd700";
+          ctx.fillText(`${timerSec}s`, ex, ey + bob + 18);
+
+          // Label
+          ctx.font = "bold 11px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#000"; ctx.fillText("Treasure Chest", ex + 1, ey + bob - 27);
+          ctx.fillStyle = "#ffd700"; ctx.fillText("Treasure Chest", ex, ey + bob - 28);
+        }
+
+        if (evt.eventType === "mana_shrine") {
+          // Blue/purple glow
+          const glowR = 25 + Math.sin(time / 200) * 8;
+          const gradient = ctx.createRadialGradient(ex, ey, 3, ex, ey, TILE_SIZE * 2.5);
+          gradient.addColorStop(0, `rgba(100, 150, 255, ${pulseAlpha * 0.6})`);
+          gradient.addColorStop(0.5, `rgba(80, 120, 255, ${pulseAlpha * 0.3})`);
+          gradient.addColorStop(1, "rgba(80, 120, 255, 0)");
+          ctx.fillStyle = gradient;
+          ctx.beginPath(); ctx.arc(ex, ey, TILE_SIZE * 2.5, 0, Math.PI * 2); ctx.fill();
+
+          // Inner glow
+          const inner = ctx.createRadialGradient(ex, ey + bob, 2, ex, ey + bob, glowR);
+          inner.addColorStop(0, `rgba(150, 200, 255, 0.8)`);
+          inner.addColorStop(1, "rgba(100, 150, 255, 0)");
+          ctx.fillStyle = inner;
+          ctx.beginPath(); ctx.arc(ex, ey + bob, glowR, 0, Math.PI * 2); ctx.fill();
+
+          // Sparkle particles around shrine
+          for (let i = 0; i < 6; i++) {
+            const angle = (time / 1500 + i * Math.PI / 3) % (Math.PI * 2);
+            const dist = 20 + Math.sin(time / 400 + i) * 5;
+            const sx = ex + Math.cos(angle) * dist;
+            const sy = ey + Math.sin(angle) * dist;
+            ctx.fillStyle = `rgba(180, 220, 255, ${0.5 + Math.sin(time / 200 + i) * 0.3})`;
+            ctx.beginPath(); ctx.arc(sx, sy, 2, 0, Math.PI * 2); ctx.fill();
+          }
+
+          ctx.font = "24px 'Segoe UI Emoji', sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("🔮", ex, ey + bob - 4);
+
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = timerSec <= 10 ? "#ff4444" : "#88ccff";
+          ctx.fillText(`${timerSec}s`, ex, ey + bob + 18);
+
+          ctx.font = "bold 11px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#000"; ctx.fillText("Mana Shrine", ex + 1, ey + bob - 27);
+          ctx.fillStyle = "#88ccff"; ctx.fillText("Mana Shrine", ex, ey + bob - 28);
+        }
+
+        if (evt.eventType === "golden_slime") {
+          // Golden sparkle aura
+          const gradient = ctx.createRadialGradient(ex, ey + bob, 5, ex, ey + bob, 35);
+          gradient.addColorStop(0, `rgba(255, 215, 0, ${pulseAlpha * 0.8})`);
+          gradient.addColorStop(0.5, `rgba(255, 230, 100, ${pulseAlpha * 0.3})`);
+          gradient.addColorStop(1, "rgba(255, 215, 0, 0)");
+          ctx.fillStyle = gradient;
+          ctx.beginPath(); ctx.arc(ex, ey + bob, 35, 0, Math.PI * 2); ctx.fill();
+
+          // Draw golden slime body (shimmering gold)
+          const shimmer = Math.sin(time / 150) * 20;
+          ctx.fillStyle = `rgb(${235 + shimmer}, ${195 + shimmer}, ${0})`;
+          const size = 18 + Math.sin(time / 200) * 2; // pulsing
+          ctx.beginPath();
+          ctx.ellipse(ex, ey + bob + 2, size, size * 0.75, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // Shine highlight
+          ctx.fillStyle = `rgba(255, 255, 200, ${0.5 + Math.sin(time / 100) * 0.2})`;
+          ctx.beginPath();
+          ctx.ellipse(ex - 5, ey + bob - 4, 5, 3, -0.3, 0, Math.PI * 2);
+          ctx.fill();
+          // Eyes
+          ctx.fillStyle = "#000";
+          ctx.beginPath(); ctx.arc(ex - 5, ey + bob, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(ex + 5, ey + bob, 2, 0, Math.PI * 2); ctx.fill();
+
+          // Sparkles flying off
+          for (let i = 0; i < 4; i++) {
+            const angle = time / 500 + i * Math.PI / 2;
+            const dist = 20 + Math.sin(time / 300 + i * 2) * 8;
+            const sx = ex + Math.cos(angle) * dist;
+            const sy = ey + bob + Math.sin(angle) * dist * 0.6 - 5;
+            ctx.fillStyle = `rgba(255, 255, 100, ${0.6 + Math.sin(time / 150 + i) * 0.3})`;
+            ctx.font = "8px serif";
+            ctx.fillText("✦", sx, sy);
+          }
+
+          // HP bar
+          if (evt.maxHp > 0) {
+            const hpW = 40;
+            const hpH = 5;
+            const hpX = ex - hpW / 2;
+            const hpY = ey + bob + 18;
+            ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(hpX - 1, hpY - 1, hpW + 2, hpH + 2);
+            ctx.fillStyle = "#1a1a1a"; ctx.fillRect(hpX, hpY, hpW, hpH);
+            const ratio = evt.maxHp > 0 ? evt.hp / evt.maxHp : 0;
+            ctx.fillStyle = "#ffd700"; ctx.fillRect(hpX, hpY, hpW * ratio, hpH);
+            ctx.font = "bold 8px 'Segoe UI', sans-serif";
+            ctx.fillStyle = "#fff"; ctx.textAlign = "center";
+            ctx.fillText(`${evt.hp}/${evt.maxHp}`, ex, hpY + hpH + 9);
+          }
+
+          // Timer
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = timerSec <= 15 ? "#ff4444" : "#ffd700";
+          ctx.textAlign = "center";
+          ctx.fillText(`${timerSec}s`, ex, ey + bob - 24);
+
+          // Label
+          ctx.font = "bold 12px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#000"; ctx.fillText("✨ Golden Slime", ex + 1, ey + bob - 35);
+          ctx.fillStyle = "#ffd700"; ctx.fillText("✨ Golden Slime", ex, ey + bob - 36);
+        }
+
+        if (evt.eventType === "xp_orb") {
+          // Purple glow
+          const gradient = ctx.createRadialGradient(ex, ey + bob, 3, ex, ey + bob, 25);
+          gradient.addColorStop(0, `rgba(155, 89, 182, ${pulseAlpha * 0.9})`);
+          gradient.addColorStop(0.5, `rgba(155, 89, 182, ${pulseAlpha * 0.3})`);
+          gradient.addColorStop(1, "rgba(155, 89, 182, 0)");
+          ctx.fillStyle = gradient;
+          ctx.beginPath(); ctx.arc(ex, ey + bob, 25, 0, Math.PI * 2); ctx.fill();
+
+          // XP orb
+          ctx.font = "26px 'Segoe UI Emoji', sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("⭐", ex, ey + bob - 4);
+
+          // Timer
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = timerSec <= 10 ? "#ff4444" : "#bb88ff";
+          ctx.fillText(`${timerSec}s`, ex, ey + bob + 18);
+
+          ctx.font = "bold 11px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#000"; ctx.fillText("XP Orb (+150)", ex + 1, ey + bob - 27);
+          ctx.fillStyle = "#bb88ff"; ctx.fillText("XP Orb (+150)", ex, ey + bob - 28);
+        }
+
+        ctx.restore();
+      });
+
       /* ── NPCs ────────────────────────────────────────── */
 
       for (const npc of npcsRef.current) {
@@ -2408,6 +2642,41 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.restore();
       });
 
+      /* ── World Event Notifications (top center banner) ──── */
+      worldEventNotifsRef.current.forEach((notif, i) => {
+        const age = now - notif.time;
+        const alpha = age < 200 ? age / 200 : age > 4500 ? (5000 - age) / 500 : 1;
+        if (alpha <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        const text = notif.message;
+        ctx.font = "bold 14px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        const textW = ctx.measureText(text).width;
+        const bannerW = textW + 30;
+        const bannerH = 28;
+        const bannerX = w / 2 - bannerW / 2;
+        const bannerY = 55 + i * 36;
+
+        // Banner background
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.beginPath();
+        ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 6);
+        ctx.fill();
+        // Border glow
+        ctx.strokeStyle = notif.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 6);
+        ctx.stroke();
+
+        // Text
+        ctx.fillStyle = notif.color;
+        ctx.fillText(text, w / 2, bannerY + 19);
+        ctx.restore();
+      });
+
       /* ── Fishing UI ──── */
       const fish = fishingRef.current;
       if (fish.active) {
@@ -2496,6 +2765,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           if (tSkeleton && tSkeleton.alive) { targetName = "Skeleton"; targetHp = tSkeleton.hp; targetMaxHp = tSkeleton.maxHp; targetColor = "#bdc3c7"; }
           const tPlayer = myTargetId !== sessionIdRef.current ? playersRef.current.get(myTargetId) : null;
           if (tPlayer && tPlayer.hp > 0) { targetName = `${tPlayer.name} [${tPlayer.level}]`; targetHp = tPlayer.hp; targetMaxHp = tPlayer.maxHp; targetColor = "#e74c3c"; }
+          const tEvent = worldEventsRef.current.get(myTargetId);
+          if (tEvent && tEvent.active && tEvent.eventType === "golden_slime" && tEvent.hp > 0) { targetName = "✨ Golden Slime"; targetHp = tEvent.hp; targetMaxHp = tEvent.maxHp; targetColor = "#ffd700"; }
 
           if (targetName) {
             const tfW = 200, tfH = 44;
@@ -2776,6 +3047,28 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           const pty = p.displayY / TILE_SIZE;
           ctx.fillStyle = "#3498db";
           ctx.fillRect(mmX + ptx * pxPerTileX - 1, mmY + pty * pxPerTileY - 1, 3, 3);
+        });
+
+        // World event markers (pulsing gold stars)
+        worldEventsRef.current.forEach((evt) => {
+          if (!evt.active) return;
+          const etx = evt.x / TILE_SIZE;
+          const ety = evt.y / TILE_SIZE;
+          const evtSize = 3 + Math.sin(time / 150) * 1.5;
+          const colors: Record<string, string> = {
+            treasure_chest: "#ffd700",
+            mana_shrine: "#6699ff",
+            golden_slime: "#ffee00",
+            xp_orb: "#bb88ff",
+          };
+          ctx.fillStyle = colors[evt.eventType] || "#ffd700";
+          ctx.beginPath();
+          ctx.arc(mmX + etx * pxPerTileX, mmY + ety * pxPerTileY, evtSize, 0, Math.PI * 2);
+          ctx.fill();
+          // Add a small outline for visibility
+          ctx.strokeStyle = "rgba(255,255,255,0.8)";
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
         });
 
         // Player dot (white, pulsing)

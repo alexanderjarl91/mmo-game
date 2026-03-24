@@ -13,6 +13,7 @@ import type { EquipSlot } from "./items";
 import { QuestSlot } from "./QuestSlot";
 import { QUESTS, getAvailableQuests, getTurnInQuests } from "./quests";
 import { DroppedItem } from "./DroppedItem";
+import { WorldEventState } from "./WorldEventState";
 
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
@@ -344,6 +345,24 @@ const BOSS_AOE_CHANCE = 0.3; // 30% chance for AOE attack
 const BOSS_AOE_RANGE = 2; // 2 tiles AOE radius
 const BOSS_BURN_CHANCE = 0.5; // 50% chance to burn on hit
 
+// World Event constants
+const WORLD_EVENT_MIN_INTERVAL_MS = 120000; // 2 minutes minimum between events
+const WORLD_EVENT_MAX_INTERVAL_MS = 300000; // 5 minutes maximum
+const TREASURE_CHEST_DURATION_MS = 60000; // 60 seconds to find it
+const MANA_SHRINE_DURATION_MS = 45000; // 45 seconds active
+const XP_ORB_DURATION_MS = 30000; // 30 seconds to grab it
+const GOLDEN_SLIME_DURATION_MS = 90000; // 90 seconds before it escapes
+const GOLDEN_SLIME_HP = 500;
+const GOLDEN_SLIME_XP = 300;
+const GOLDEN_SLIME_ATK = 5; // weak attack - it tries to run
+const GOLDEN_SLIME_GOLD_MIN = 200;
+const GOLDEN_SLIME_GOLD_MAX = 500;
+const TREASURE_CHEST_GOLD_MIN = 100;
+const TREASURE_CHEST_GOLD_MAX = 300;
+const XP_ORB_XP = 150;
+const MANA_SHRINE_RANGE = 2; // tiles — heals players within range
+let worldEventCounter = 0;
+
 const SLIME_TYPES = [
   { color: "#2ecc71", size: "small", hp: 30, xp: 15, name: "Green Slime" },
   { color: "#3498db", size: "normal", hp: 50, xp: 25, name: "Blue Slime" },
@@ -395,6 +414,7 @@ export class GameState extends Schema {
   @type({ map: SkeletonState }) skeletons = new MapSchema<SkeletonState>();
   @type({ map: BossState }) bosses = new MapSchema<BossState>();
   @type({ map: DroppedItem }) droppedItems = new MapSchema<DroppedItem>();
+  @type({ map: WorldEventState }) worldEvents = new MapSchema<WorldEventState>();
 }
 
 // Ground loot config
@@ -912,8 +932,124 @@ export class GameRoom extends Room<GameState> {
       return;
     }
 
+    // Try world event target (golden slime)
+    const worldEvt = this.state.worldEvents.get(player.targetId);
+    if (worldEvt && worldEvt.active && worldEvt.eventType === "golden_slime" && worldEvt.hp > 0) {
+      const d = dist(px, py, worldEvt.x, worldEvt.y);
+      if (d > cfg.range) return;
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      worldEvt.hp = Math.max(0, worldEvt.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", {
+          fromX: px + TILE_SIZE / 2, fromY: py,
+          toX: worldEvt.x + TILE_SIZE / 2, toY: worldEvt.y,
+          attackerId: client.sessionId,
+          type: "golden",
+        });
+      }
+
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+
+      if (worldEvt.hp <= 0) {
+        worldEvt.active = false;
+        const evtId = player.targetId;
+        player.targetId = "";
+        const gold = randRange(GOLDEN_SLIME_GOLD_MIN, GOLDEN_SLIME_GOLD_MAX);
+        player.xp += GOLDEN_SLIME_XP;
+        this.spawnGroundLoot(worldEvt.x, worldEvt.y, "boss", client.sessionId, gold);
+        checkLevelUp(player, this, client.sessionId);
+        updateQuestProgress(player, "slime", this, client.sessionId);
+
+        this.broadcast("world_event_end", {
+          id: evtId,
+          eventType: "golden_slime",
+          message: `✨ ${player.name} slayed the Golden Slime! (+${GOLDEN_SLIME_XP} XP, +${gold} gold)`,
+        });
+        this.broadcast("kill", {
+          targetId: evtId,
+          killerId: client.sessionId,
+          killerName: player.name,
+          xp: GOLDEN_SLIME_XP,
+        });
+        this.clock.setTimeout(() => { this.state.worldEvents.delete(evtId); }, 3000);
+      }
+      return;
+    }
+
     // Target invalid — clear
     player.targetId = "";
+  }
+
+  spawnWorldEvent() {
+    const eventTypes = ["treasure_chest", "mana_shrine", "golden_slime", "xp_orb"];
+    const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+    
+    // Find a valid spawn location (outside village, on walkable tile)
+    let spawnX = 0, spawnY = 0;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const tx = 3 + Math.floor(Math.random() * (MAP_W - 6));
+      const ty = 3 + Math.floor(Math.random() * (MAP_H - 6));
+      // Not in village
+      if (tx >= 26 && tx <= 46 && ty >= 26 && ty <= 46) continue;
+      if (!canWalk(tx, ty)) continue;
+      spawnX = tx;
+      spawnY = ty;
+      break;
+    }
+    if (spawnX === 0 && spawnY === 0) return; // couldn't find spot
+
+    const now = Date.now();
+    const id = `event_${worldEventCounter++}`;
+    const evt = new WorldEventState();
+    evt.id = id;
+    evt.eventType = eventType;
+    evt.x = spawnX * TILE_SIZE;
+    evt.y = spawnY * TILE_SIZE;
+    evt.spawnedAt = now;
+    evt.active = true;
+
+    switch (eventType) {
+      case "treasure_chest":
+        evt.expiresAt = now + TREASURE_CHEST_DURATION_MS;
+        evt.hp = 0;
+        evt.maxHp = 0;
+        break;
+      case "mana_shrine":
+        evt.expiresAt = now + MANA_SHRINE_DURATION_MS;
+        evt.hp = 0;
+        evt.maxHp = 0;
+        break;
+      case "golden_slime":
+        evt.expiresAt = now + GOLDEN_SLIME_DURATION_MS;
+        evt.hp = GOLDEN_SLIME_HP;
+        evt.maxHp = GOLDEN_SLIME_HP;
+        break;
+      case "xp_orb":
+        evt.expiresAt = now + XP_ORB_DURATION_MS;
+        evt.hp = 0;
+        evt.maxHp = 0;
+        break;
+    }
+
+    this.state.worldEvents.set(id, evt);
+
+    // Announce to all players
+    const typeNames: Record<string, string> = {
+      treasure_chest: "💰 A Treasure Chest has appeared in the wilderness!",
+      mana_shrine: "🔮 A Mana Shrine has materialized! Stand near it to heal!",
+      golden_slime: "✨ A Golden Slime has spawned! Catch it for huge rewards!",
+      xp_orb: "⭐ A glowing XP Orb has appeared! First to reach it gets bonus XP!",
+    };
+
+    this.broadcast("world_event_spawn", {
+      id,
+      eventType,
+      x: evt.x,
+      y: evt.y,
+      message: typeNames[eventType] || "A mysterious event has appeared!",
+      duration: evt.expiresAt - now,
+    });
   }
 
   onCreate() {
@@ -1454,6 +1590,116 @@ export class GameRoom extends Room<GameState> {
       });
     }, BOSS_MOVE_INTERVAL_MS);
 
+    // ── World Events System ──
+    const scheduleNextWorldEvent = () => {
+      const delay = WORLD_EVENT_MIN_INTERVAL_MS + Math.random() * (WORLD_EVENT_MAX_INTERVAL_MS - WORLD_EVENT_MIN_INTERVAL_MS);
+      this.clock.setTimeout(() => {
+        this.spawnWorldEvent();
+        scheduleNextWorldEvent();
+      }, delay);
+    };
+    // Start first event sooner (30-60s) so players see it quickly
+    this.clock.setTimeout(() => {
+      this.spawnWorldEvent();
+      scheduleNextWorldEvent();
+    }, 30000 + Math.random() * 30000);
+
+    // World event tick — golden slime AI + mana shrine healing + expiry
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.worldEvents.forEach((evt, evtId) => {
+        if (!evt.active) return;
+
+        // Check expiry
+        if (now >= evt.expiresAt) {
+          evt.active = false;
+          if (evt.eventType === "golden_slime") {
+            this.broadcast("world_event_end", { id: evtId, eventType: evt.eventType, message: "✨ The Golden Slime escaped!" });
+          } else {
+            this.broadcast("world_event_end", { id: evtId, eventType: evt.eventType, message: `The ${evt.eventType.replace("_", " ")} faded away...` });
+          }
+          this.clock.setTimeout(() => { this.state.worldEvents.delete(evtId); }, 3000);
+          return;
+        }
+
+        // Mana Shrine: heal nearby players every tick
+        if (evt.eventType === "mana_shrine") {
+          const etx = Math.round(evt.x / TILE_SIZE);
+          const ety = Math.round(evt.y / TILE_SIZE);
+          this.state.players.forEach((p, sid) => {
+            if (p.hp <= 0) return;
+            const px = Math.round(p.x / TILE_SIZE);
+            const py = Math.round(p.y / TILE_SIZE);
+            const d = Math.max(Math.abs(px - etx), Math.abs(py - ety));
+            if (d <= MANA_SHRINE_RANGE) {
+              let healed = false;
+              if (p.hp < p.maxHp) { p.hp = Math.min(p.maxHp, p.hp + 10); healed = true; }
+              if (p.mp < p.maxMp) { p.mp = Math.min(p.maxMp, p.mp + 10); healed = true; }
+              // Clear status effects near shrine
+              if (p.statusEffect) { p.statusEffect = ""; p.statusEffectEnd = 0; healed = true; }
+            }
+          });
+        }
+
+        // Golden Slime AI: runs away from nearest player
+        if (evt.eventType === "golden_slime" && evt.hp > 0) {
+          const etx = Math.round(evt.x / TILE_SIZE);
+          const ety = Math.round(evt.y / TILE_SIZE);
+
+          // Find nearest player
+          let nearestDist = Infinity;
+          let nearestPx = etx, nearestPy = ety;
+          this.state.players.forEach((p) => {
+            if (p.hp <= 0) return;
+            const px = Math.round(p.x / TILE_SIZE);
+            const py = Math.round(p.y / TILE_SIZE);
+            const d = Math.max(Math.abs(px - etx), Math.abs(py - ety));
+            if (d < nearestDist) { nearestDist = d; nearestPx = px; nearestPy = py; }
+          });
+
+          // If a player is within 6 tiles, run away
+          if (nearestDist <= 6 && nearestDist > 0) {
+            // Move in opposite direction from nearest player
+            const dx = etx - nearestPx;
+            const dy = ety - nearestPy;
+            // Normalize to -1, 0, or 1
+            const mdx = dx === 0 ? 0 : (dx > 0 ? 1 : -1);
+            const mdy = dy === 0 ? 0 : (dy > 0 ? 1 : -1);
+
+            // Try primary direction, then fallback to just x or y
+            const moves = [
+              { dx: mdx, dy: mdy },
+              { dx: mdx, dy: 0 },
+              { dx: 0, dy: mdy },
+              // Random perpendicular if stuck
+              { dx: mdy || 1, dy: 0 },
+              { dx: 0, dy: mdx || 1 },
+            ];
+
+            for (const m of moves) {
+              if (m.dx === 0 && m.dy === 0) continue;
+              const nx = etx + m.dx;
+              const ny = ety + m.dy;
+              if (canWalk(nx, ny) && !(nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44)) {
+                evt.x = nx * TILE_SIZE;
+                evt.y = ny * TILE_SIZE;
+                break;
+              }
+            }
+          } else if (Math.random() < 0.3) {
+            // Random wander when no players nearby
+            const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+            const dir = dirs[Math.floor(Math.random() * dirs.length)];
+            const nx = etx + dir.dx, ny = ety + dir.dy;
+            if (canWalk(nx, ny) && !(nx >= 28 && nx <= 44 && ny >= 28 && ny <= 44)) {
+              evt.x = nx * TILE_SIZE;
+              evt.y = ny * TILE_SIZE;
+            }
+          }
+        }
+      });
+    }, 1000); // tick every second
+
     // Auto-attack tick — runs frequently, each player attacks on their own interval
     this.clock.setInterval(() => {
       const now = Date.now();
@@ -1627,7 +1873,8 @@ export class GameRoom extends Room<GameState> {
         const skeleton = this.state.skeletons.get(tid);
         const boss = this.state.bosses.get(tid);
         const targetPlayer = this.state.players.get(tid);
-        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (boss && boss.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
+        const worldEvent = this.state.worldEvents.get(tid);
+        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (boss && boss.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId) || (worldEvent && worldEvent.active && worldEvent.eventType === "golden_slime" && worldEvent.hp > 0);
         if (!valid) {
           player.targetId = "";
           return;
@@ -1942,6 +2189,113 @@ export class GameRoom extends Room<GameState> {
     
     this.onMessage("fish_cancel", (client) => {
       fishingPlayers.delete(client.sessionId);
+    });
+
+    // ── World Event Interaction ──
+    this.onMessage("interact_event", (client, data: { eventId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const evt = this.state.worldEvents.get(data.eventId);
+      if (!evt || !evt.active) return;
+
+      const px = Math.round(player.x / TILE_SIZE);
+      const py = Math.round(player.y / TILE_SIZE);
+      const ex = Math.round(evt.x / TILE_SIZE);
+      const ey = Math.round(evt.y / TILE_SIZE);
+      const d = Math.max(Math.abs(px - ex), Math.abs(py - ey));
+
+      if (evt.eventType === "treasure_chest") {
+        if (d > 1) return; // must be adjacent
+        evt.active = false;
+        const gold = randRange(TREASURE_CHEST_GOLD_MIN, TREASURE_CHEST_GOLD_MAX);
+        player.gold += gold;
+        // Also roll some bonus loot
+        const bonusItems = rollLoot("wolf"); // use wolf loot table for treasure
+        for (const drop of bonusItems) {
+          addToInventory(player, drop.itemId, drop.quantity);
+        }
+        const itemNames = bonusItems.map(d => {
+          const it = ITEMS[d.itemId];
+          return `${it?.icon || ""} ${it?.name || d.itemId}`;
+        });
+        client.send("event_reward", {
+          eventType: "treasure_chest",
+          message: `💰 You opened the treasure chest! +${gold} gold${itemNames.length > 0 ? " + " + itemNames.join(", ") : ""}!`,
+        });
+        this.broadcast("world_event_end", {
+          id: data.eventId,
+          eventType: "treasure_chest",
+          message: `💰 ${player.name} opened the Treasure Chest!`,
+        });
+        this.clock.setTimeout(() => { this.state.worldEvents.delete(data.eventId); }, 2000);
+      }
+
+      if (evt.eventType === "xp_orb") {
+        if (d > 1) return;
+        evt.active = false;
+        player.xp += XP_ORB_XP;
+        checkLevelUp(player, this, client.sessionId);
+        client.send("event_reward", {
+          eventType: "xp_orb",
+          message: `⭐ You absorbed the XP Orb! +${XP_ORB_XP} XP!`,
+        });
+        this.broadcast("world_event_end", {
+          id: data.eventId,
+          eventType: "xp_orb",
+          message: `⭐ ${player.name} grabbed the XP Orb!`,
+        });
+        this.clock.setTimeout(() => { this.state.worldEvents.delete(data.eventId); }, 2000);
+      }
+    });
+
+    // ── Attack World Event (Golden Slime) ──
+    this.onMessage("attack_event", (client, data: { eventId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const evt = this.state.worldEvents.get(data.eventId);
+      if (!evt || !evt.active || evt.eventType !== "golden_slime" || evt.hp <= 0) return;
+
+      const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+      const d = dist(player.x, player.y, evt.x, evt.y);
+      if (d > cfg.range) return;
+
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      evt.hp = Math.max(0, evt.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", {
+          fromX: player.x + TILE_SIZE / 2, fromY: player.y,
+          toX: evt.x + TILE_SIZE / 2, toY: evt.y,
+          attackerId: client.sessionId,
+          type: "golden",
+        });
+      }
+
+      this.broadcast("hit", { targetId: data.eventId, damage, attackerId: client.sessionId });
+
+      if (evt.hp <= 0) {
+        evt.active = false;
+        const gold = randRange(GOLDEN_SLIME_GOLD_MIN, GOLDEN_SLIME_GOLD_MAX);
+        player.xp += GOLDEN_SLIME_XP;
+        // Spawn ground loot (guaranteed rare drops)
+        this.spawnGroundLoot(evt.x, evt.y, "boss", client.sessionId, gold);
+        checkLevelUp(player, this, client.sessionId);
+        // Also give quest credit as slime kill
+        updateQuestProgress(player, "slime", this, client.sessionId);
+
+        this.broadcast("world_event_end", {
+          id: data.eventId,
+          eventType: "golden_slime",
+          message: `✨ ${player.name} slayed the Golden Slime! (+${GOLDEN_SLIME_XP} XP, +${gold} gold)`,
+        });
+        this.broadcast("kill", {
+          targetId: data.eventId,
+          killerId: client.sessionId,
+          killerName: player.name,
+          xp: GOLDEN_SLIME_XP,
+        });
+        this.clock.setTimeout(() => { this.state.worldEvents.delete(data.eventId); }, 3000);
+      }
     });
 
     // ── Heal spell ──
