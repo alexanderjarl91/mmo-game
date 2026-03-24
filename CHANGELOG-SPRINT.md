@@ -2,6 +2,16 @@
 
 ## Features Added
 
+### 17. ⚡ Expanded 6-Slot Ability Bar with Cooldown Sweeps
+- Hotbar expanded from 4 → 6 slots showing **all class abilities**
+- **Warrior:** Heal | Cleave | Shield Wall | War Cry | HP Pot | MP Pot
+- **Ranger:** Heal | Power Shot | Frost Arrow | Rain of Arrows | HP Pot | MP Pot
+- **Clock-sweep cooldown animation** — dark overlay sweeps clockwise like classic MMO cooldowns
+- Cooldown timer shows remaining seconds in large text on the slot
+- **Color-coded borders:** green = ready, orange = on cooldown, gray = can't use
+- Ability name labels on defensive/AOE slots for clarity
+- Keys: 1=Heal, 2=Attack, 3=Defense/CC, 4=AOE/Buff, 5=HP Pot, 6=MP Pot
+
 ### 16. 🌟 World Events System
 - **Random events** spawn every 2–5 minutes across the wilderness (first event within 30–60s)
 - **💰 Treasure Chest**: Walk/click to open — rewards 100–300 gold + bonus loot drops (60s timer)
