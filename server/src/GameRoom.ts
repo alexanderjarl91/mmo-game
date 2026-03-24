@@ -1980,9 +1980,10 @@ export class GameRoom extends Room<GameState> {
       if (now - lastUse < POTION_COOLDOWN_MS) return;
       potionCooldowns.set(client.sessionId, now);
 
-      // Don't waste potions at full
-      if (item.effect?.hp && player.hp >= player.maxHp) return;
-      if (item.effect?.mp && player.mp >= player.maxMp) return;
+      // Don't waste potions at full (only block if ALL effects are maxed)
+      const hpFull = !item.effect?.hp || player.hp >= player.maxHp;
+      const mpFull = !item.effect?.mp || player.mp >= player.maxMp;
+      if (hpFull && mpFull) return;
 
       removeFromInventory(player, itemId, 1);
 
