@@ -2,6 +2,16 @@
 
 ## Features Added
 
+### 18. 🔥 Kill Streak System
+- Track consecutive monster kills without dying
+- **5 milestones:** 🔥 Killing Spree (3) → ⚡ Rampage (5) → 💀 Unstoppable (8) → ☠️ Godlike (12) → 👑 Legendary (20)
+- Each milestone grants **bonus XP and gold** (25–500 XP, 10–250 gold)
+- **Dramatic center-screen banner** with glow effect and scale-in animation on milestones
+- Kill streak count (🔥 N kills) shown above all players with 3+ kills, color-coded by tier
+- **Camera shake** on 5+ kill streaks for extra impact
+- Kill feed broadcasts streak milestones and streak-ending deaths to all players
+- Streak resets on death — creates risk/reward tension in combat
+
 ### 17. ⚡ Expanded 6-Slot Ability Bar with Cooldown Sweeps
 - Hotbar expanded from 4 → 6 slots showing **all class abilities**
 - **Warrior:** Heal | Cleave | Shield Wall | War Cry | HP Pot | MP Pot
