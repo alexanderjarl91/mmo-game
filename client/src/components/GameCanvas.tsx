@@ -1574,19 +1574,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const WORLD_H = mapSizeRef.current.h * TILE_SIZE;
       const me = playersRef.current.get(sessionIdRef.current);
       
-      // Auto-pickup dropped items when walking over them (throttled to every 200ms)
+      // Auto-interact with world events when walking over them (no auto-pickup for loot)
       if (me && me.hp > 0 && now - (lastAutoPickupRef.current || 0) > 200) {
         const px = me.displayX + TILE_SIZE / 2;
         const py = me.displayY + TILE_SIZE / 2;
-        droppedItemsRef.current.forEach((drop, id) => {
-          const ix = drop.x + TILE_SIZE / 2;
-          const iy = drop.y + TILE_SIZE / 2;
-          const d = Math.sqrt((px - ix) ** 2 + (py - iy) ** 2);
-          if (d < TILE_SIZE * 0.8) {
-            roomRef.current?.send("pickup_item", { itemId: id });
-          }
-        });
-        // Also auto-interact with world events when walking over them
+        // Auto-interact with world events when walking over them
         worldEventsRef.current.forEach((evt, id) => {
           if (!evt.active) return;
           if (evt.eventType !== "treasure_chest" && evt.eventType !== "xp_orb") return;
