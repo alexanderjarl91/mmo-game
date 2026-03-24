@@ -1590,6 +1590,51 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (me) {
         ctx.fillText(`Tile: ${Math.round(me.toX / TILE_SIZE)}, ${Math.round(me.toY / TILE_SIZE)}`, 10, 36);
 
+        // Target info frame (top-center)
+        if (myTargetId && !isMobile) {
+          let targetName = "";
+          let targetHp = 0, targetMaxHp = 0;
+          let targetColor = "#fff";
+          const tSlime = slimesRef.current.get(myTargetId);
+          if (tSlime && tSlime.alive) { targetName = "Slime"; targetHp = tSlime.hp; targetMaxHp = tSlime.maxHp; targetColor = tSlime.color; }
+          const tWolf = wolvesRef.current.get(myTargetId);
+          if (tWolf && tWolf.alive) { targetName = "Wolf"; targetHp = tWolf.hp; targetMaxHp = tWolf.maxHp; targetColor = "#ff6b6b"; }
+          const tGoblin = goblinsRef.current.get(myTargetId);
+          if (tGoblin && tGoblin.alive) { targetName = tGoblin.variant === "shaman" ? "Goblin Shaman" : tGoblin.variant === "archer" ? "Goblin Archer" : "Goblin"; targetHp = tGoblin.hp; targetMaxHp = tGoblin.maxHp; targetColor = "#7dcea0"; }
+          const tSkeleton = skeletonsRef.current.get(myTargetId);
+          if (tSkeleton && tSkeleton.alive) { targetName = "Skeleton"; targetHp = tSkeleton.hp; targetMaxHp = tSkeleton.maxHp; targetColor = "#bdc3c7"; }
+          const tPlayer = myTargetId !== sessionIdRef.current ? playersRef.current.get(myTargetId) : null;
+          if (tPlayer && tPlayer.hp > 0) { targetName = `${tPlayer.name} [${tPlayer.level}]`; targetHp = tPlayer.hp; targetMaxHp = tPlayer.maxHp; targetColor = "#e74c3c"; }
+
+          if (targetName) {
+            const tfW = 200, tfH = 44;
+            const tfX = w / 2 - tfW / 2, tfY = 40;
+            ctx.save();
+            ctx.globalAlpha = 0.85;
+            ctx.fillStyle = "rgba(0,0,0,0.75)";
+            ctx.beginPath(); ctx.roundRect(tfX, tfY, tfW, tfH, 6); ctx.fill();
+            ctx.strokeStyle = "rgba(255,50,50,0.6)"; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.roundRect(tfX, tfY, tfW, tfH, 6); ctx.stroke();
+            ctx.globalAlpha = 1;
+            // Name
+            ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+            ctx.fillStyle = targetColor;
+            ctx.fillText(targetName, tfX + tfW / 2, tfY + 16);
+            // HP bar
+            const hpW = tfW - 24, hpH = 8;
+            const hpX = tfX + 12, hpY = tfY + 24;
+            ctx.fillStyle = "#1a1a1a"; ctx.fillRect(hpX, hpY, hpW, hpH);
+            const hpPct = Math.max(0, targetHp / targetMaxHp);
+            const hpCol = hpPct > 0.5 ? "#2ecc71" : hpPct > 0.25 ? "#f39c12" : "#e74c3c";
+            ctx.fillStyle = hpCol; ctx.fillRect(hpX, hpY, hpW * hpPct, hpH);
+            ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(hpX, hpY, hpW, hpH);
+            // HP text
+            ctx.font = "9px monospace"; ctx.fillStyle = "#ccc"; ctx.textAlign = "center";
+            ctx.fillText(`${targetHp} / ${targetMaxHp}`, tfX + tfW / 2, tfY + 40);
+            ctx.restore();
+          }
+        }
+
         // Player stats bar (bottom-left on desktop)
         if (!isMobile) {
           const barY = h - 50;
