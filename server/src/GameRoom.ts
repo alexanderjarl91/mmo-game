@@ -537,36 +537,27 @@ export class GameRoom extends Room<GameState> {
     const drops = rollLoot(lootTable);
     console.log(`[LOOT] rolled ${drops.length} item drops + gold=${goldAmount}`);
     
-    // Spawn gold as a ground item
-    if (goldAmount && goldAmount > 0) {
-      const id = `drop_${droppedItemCounter++}`;
-      const item = new DroppedItem();
-      item.id = id;
-      item.itemId = "gold";
-      item.quantity = goldAmount;
-      item.x = x;
-      item.y = y;
-      item.droppedAt = Date.now();
-      item.ownerSessionId = ownerSessionId;
-      this.state.droppedItems.set(id, item);
-      console.log(`[LOOT] gold drop spawned: id=${id} qty=${goldAmount} droppedItems size=${this.state.droppedItems.size}`);
-      
-      // Schedule despawn
-      this.clock.setTimeout(() => {
-        this.state.droppedItems.delete(id);
-      }, DROPPED_ITEM_LIFETIME_MS);
-    }
+    // Spread drops across adjacent tiles so nothing stacks
+    const allDrops: Array<{ itemId: string; quantity: number }> = [];
+    if (goldAmount && goldAmount > 0) allDrops.push({ itemId: "gold", quantity: goldAmount });
+    allDrops.push(...drops);
     
-    // Spawn each item drop
-    for (const drop of drops) {
+    // Offsets: center, then cardinal directions, then diagonals
+    const offsets = [
+      [0, 0], [1, 0], [-1, 0], [0, 1], [0, -1],
+      [1, 1], [-1, -1], [1, -1], [-1, 1],
+    ];
+    
+    for (let i = 0; i < allDrops.length; i++) {
+      const drop = allDrops[i];
       const id = `drop_${droppedItemCounter++}`;
       const item = new DroppedItem();
       item.id = id;
       item.itemId = drop.itemId;
       item.quantity = drop.quantity;
-      // Slight offset so items don't stack exactly
-      item.x = x + (Math.random() - 0.5) * TILE_SIZE * 0.5;
-      item.y = y + (Math.random() - 0.5) * TILE_SIZE * 0.5;
+      const off = offsets[i % offsets.length];
+      item.x = x + off[0] * TILE_SIZE;
+      item.y = y + off[1] * TILE_SIZE;
       item.droppedAt = Date.now();
       item.ownerSessionId = ownerSessionId;
       this.state.droppedItems.set(id, item);

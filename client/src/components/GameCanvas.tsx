@@ -2972,8 +2972,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             cooldownPct: getCooldownPct(isRanger ? "rain_of_arrows" : "war_cry"),
             cdAbility: isRanger ? "rain_of_arrows" : "war_cry",
           },
-          { key: "5", icon: "❤️", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
-          { key: "6", icon: "💙", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
+          { key: "5", icon: "❤️", spriteId: "health_potion", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
+          { key: "6", icon: "💙", spriteId: "mana_potion", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
         ];
 
         // Recalculate bar dimensions for 6 slots
@@ -3032,8 +3032,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
           ctx.stroke();
 
-          // Icon (dim if on cooldown)
-          if (spell.icon) {
+          // Icon (dim if on cooldown) — use sprite if available
+          if (spell.spriteId && itemSpritesRef.current.has(spell.spriteId)) {
+            ctx.globalAlpha = spell.cooldownPct > 0 ? 0.3 : spell.canUse ? 1 : 0.4;
+            const spriteImg = itemSpritesRef.current.get(spell.spriteId)!;
+            const iconSize = SLOT_SIZE * 0.6;
+            ctx.drawImage(spriteImg, sx + (SLOT_SIZE - iconSize) / 2, barBY + 4, iconSize, iconSize);
+            ctx.globalAlpha = 1;
+          } else if (spell.icon) {
             ctx.font = "22px serif";
             ctx.textAlign = "center";
             ctx.globalAlpha = spell.cooldownPct > 0 ? 0.3 : spell.canUse ? 1 : 0.4;
