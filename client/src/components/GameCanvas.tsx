@@ -1428,21 +1428,6 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
-      // Auto-pickup dropped items when walking over them (throttled to every 200ms)
-      if (me && me.hp > 0 && now - (lastAutoPickupRef.current || 0) > 200) {
-        const px = me.displayX + TILE_SIZE / 2;
-        const py = me.displayY + TILE_SIZE / 2;
-        droppedItemsRef.current.forEach((drop, id) => {
-          const ix = drop.x + TILE_SIZE / 2;
-          const iy = drop.y + TILE_SIZE / 2;
-          const d = Math.sqrt((px - ix) ** 2 + (py - iy) ** 2);
-          if (d < TILE_SIZE * 0.8) {
-            roomRef.current?.send("pickup_item", { itemId: id });
-          }
-        });
-        lastAutoPickupRef.current = now;
-      }
-
       // Clean up timed effects
       chatBubblesRef.current = chatBubblesRef.current.filter(b => now - b.time < CHAT_DURATION);
       emoteBubblesRef.current = emoteBubblesRef.current.filter(b => now - b.time < EMOTE_DURATION);
@@ -1469,6 +1454,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const WORLD_W = mapSizeRef.current.w * TILE_SIZE;
       const WORLD_H = mapSizeRef.current.h * TILE_SIZE;
       const me = playersRef.current.get(sessionIdRef.current);
+      
+      // Auto-pickup dropped items when walking over them (throttled to every 200ms)
+      if (me && me.hp > 0 && now - (lastAutoPickupRef.current || 0) > 200) {
+        const px = me.displayX + TILE_SIZE / 2;
+        const py = me.displayY + TILE_SIZE / 2;
+        droppedItemsRef.current.forEach((drop, id) => {
+          const ix = drop.x + TILE_SIZE / 2;
+          const iy = drop.y + TILE_SIZE / 2;
+          const d = Math.sqrt((px - ix) ** 2 + (py - iy) ** 2);
+          if (d < TILE_SIZE * 0.8) {
+            roomRef.current?.send("pickup_item", { itemId: id });
+          }
+        });
+        lastAutoPickupRef.current = now;
+      }
+
       // Camera shake
       let shakeX = 0, shakeY = 0;
       const shakeAge = now - cameraShakeRef.current.time;
