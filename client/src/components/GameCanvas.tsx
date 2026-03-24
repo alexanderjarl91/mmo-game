@@ -2715,17 +2715,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         ctx.restore();
       }
 
-      /* ── Kill feed (top right) ───────────────────────── */
-
-      killFeedRef.current.forEach((kf, i) => {
-        const age = now - kf.time;
-        const alpha = age > 4000 ? (5000 - age) / 1000 : Math.min(age / 200, 1);
-        ctx.save(); ctx.globalAlpha = alpha;
-        ctx.font = "12px 'Segoe UI', sans-serif"; ctx.textAlign = "right";
-        ctx.fillStyle = "#FFD700";
-        ctx.fillText(kf.text, w - 10, 50 + i * 18);
-        ctx.restore();
-      });
+      /* ── Kill feed (below minimap) ─────────────────────── */
+      {
+        const mmW_kf = isMobile ? 100 : 140;
+        const mmY_kf = isMobile ? 50 : 30;
+        const mmBottom = mmY_kf + mmW_kf + 6; // minimap bottom + border + gap
+        killFeedRef.current.forEach((kf, i) => {
+          const age = now - kf.time;
+          const alpha = age > 4000 ? (5000 - age) / 1000 : Math.min(age / 200, 1);
+          ctx.save(); ctx.globalAlpha = alpha;
+          ctx.font = "12px 'Segoe UI', sans-serif"; ctx.textAlign = "right";
+          ctx.fillStyle = "#FFD700";
+          ctx.fillText(kf.text, w - 10, mmBottom + i * 18);
+          ctx.restore();
+        });
+      }
 
       /* ── Loot notifications (left side, above HUD) ──── */
 

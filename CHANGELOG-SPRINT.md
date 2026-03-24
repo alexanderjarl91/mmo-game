@@ -16,6 +16,12 @@
 - Removed kill streak indicator above player names (🔥 X kills)
 - Removed streak-related kill feed entries and camera shake on big streaks
 
+## Move World Announcements Below Mini-Map
+- Repositioned the yellow kill feed / world announcements (level ups, boss spawns, PvP kills, quest completions) from the top-right corner to directly below the mini-map
+- Dynamically calculates position based on minimap size for both desktop (140px) and mobile (100px)
+- Keeps existing yellow (#FFD700) color, fade-in/out behavior, and vertical stacking
+- No overlap with minimap or other UI elements
+
 ## UI Polish & QoL Fixes
 
 ### 🔢 No Decimals in HP/MP
