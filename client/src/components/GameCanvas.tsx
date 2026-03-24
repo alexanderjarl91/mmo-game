@@ -1104,40 +1104,46 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
       room.state.bosses.onRemove((_: any, id: string) => { bossesRef.current.delete(id); });
 
-      // Dropped items
-      if (room.state.droppedItems) {
-        room.state.droppedItems.onAdd((item: any, id: string) => {
-          droppedItemsRef.current.set(id, {
-            id, itemId: item.itemId, quantity: item.quantity,
-            x: item.x, y: item.y, droppedAt: item.droppedAt,
+      // Dropped items — use try/catch + retry to handle schema not ready yet
+      const attachDroppedItems = () => {
+        try {
+          room.state.droppedItems.onAdd((item: any, id: string) => {
+            droppedItemsRef.current.set(id, {
+              id, itemId: item.itemId, quantity: item.quantity,
+              x: item.x, y: item.y, droppedAt: item.droppedAt,
+            });
+            item.onChange(() => {
+              const d = droppedItemsRef.current.get(id);
+              if (d) { d.x = item.x; d.y = item.y; d.quantity = item.quantity; }
+            });
           });
-          item.onChange(() => {
-            const d = droppedItemsRef.current.get(id);
-            if (d) { d.x = item.x; d.y = item.y; d.quantity = item.quantity; }
-          });
-        });
-        room.state.droppedItems.onRemove((_: any, id: string) => { droppedItemsRef.current.delete(id); });
-      }
+          room.state.droppedItems.onRemove((_: any, id: string) => { droppedItemsRef.current.delete(id); });
+        } catch { setTimeout(attachDroppedItems, 500); }
+      };
+      attachDroppedItems();
 
       // World events
-      if (room.state.worldEvents) {
-        room.state.worldEvents.onAdd((evt: any, id: string) => {
-          worldEventsRef.current.set(id, {
-            id, eventType: evt.eventType, x: evt.x, y: evt.y,
-            spawnedAt: evt.spawnedAt, expiresAt: evt.expiresAt,
-            active: evt.active, hp: evt.hp, maxHp: evt.maxHp,
+      const attachWorldEvents = () => {
+        try {
+          room.state.worldEvents.onAdd((evt: any, id: string) => {
+            worldEventsRef.current.set(id, {
+              id, eventType: evt.eventType, x: evt.x, y: evt.y,
+              spawnedAt: evt.spawnedAt, expiresAt: evt.expiresAt,
+              active: evt.active, hp: evt.hp, maxHp: evt.maxHp,
+            });
+            evt.onChange(() => {
+              const e = worldEventsRef.current.get(id);
+              if (e) {
+                e.x = evt.x; e.y = evt.y; e.active = evt.active;
+                e.hp = evt.hp; e.maxHp = evt.maxHp;
+                e.expiresAt = evt.expiresAt;
+              }
+            });
           });
-          evt.onChange(() => {
-            const e = worldEventsRef.current.get(id);
-            if (e) {
-              e.x = evt.x; e.y = evt.y; e.active = evt.active;
-              e.hp = evt.hp; e.maxHp = evt.maxHp;
-              e.expiresAt = evt.expiresAt;
-            }
-          });
-        });
-        room.state.worldEvents.onRemove((_: any, id: string) => { worldEventsRef.current.delete(id); });
-      }
+          room.state.worldEvents.onRemove((_: any, id: string) => { worldEventsRef.current.delete(id); });
+        } catch { setTimeout(attachWorldEvents, 500); }
+      };
+      attachWorldEvents();
 
       // World event messages
       room.onMessage("world_event_spawn", (data: { id: string; eventType: string; message: string; duration: number }) => {
