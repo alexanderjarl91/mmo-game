@@ -947,6 +947,15 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (d < TILE_SIZE && d < bestDist) { bestId = id; bestDist = d; }
     });
 
+    // Check bosses
+    bossesRef.current.forEach((b, id) => {
+      if (!b.alive) return;
+      const bx = b.displayX + TILE_SIZE / 2;
+      const by = b.displayY + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - bx) ** 2 + (worldY - by) ** 2);
+      if (d < TILE_SIZE * 1.5 && d < bestDist) { bestId = id; bestDist = d; } // larger click area for boss
+    });
+
     // Check players
     playersRef.current.forEach((p, sid) => {
       if (sid === sessionIdRef.current || p.hp <= 0) return;
@@ -1494,6 +1503,119 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
+      /* ── Bosses ─────────────────────────────────────── */
+      bossesRef.current.forEach((b, bossId) => {
+        if (!b.alive) return;
+        const bx = b.displayX + TILE_SIZE / 2 - camX;
+        const by = b.displayY + TILE_SIZE / 2 - camY;
+        if (bx < -120 || bx > w + 120 || by < -120 || by > h + 120) return;
+
+        const isBossTargeted = myTargetId === bossId;
+        if (isBossTargeted) {
+          const pulse = 0.5 + Math.sin(time / 150) * 0.4;
+          ctx.strokeStyle = `rgba(255, 0, 0, ${pulse})`;
+          ctx.lineWidth = 4;
+          ctx.strokeRect(bx - TILE_SIZE / 2 - 8, by - TILE_SIZE / 2 - 8, TILE_SIZE + 16, TILE_SIZE + 16);
+        }
+
+        const bossHit = b.hitTime && (now - b.hitTime < 200);
+        const isEnraged = b.phase >= 2;
+
+        ctx.save();
+        if (bossHit) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
+
+        // Shadow (bigger)
+        ctx.beginPath(); ctx.ellipse(bx, by + 22, 24, 8, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fill();
+
+        // Dragon body — large red/orange beast
+        const bodyColor = isEnraged ? "#cc0000" : "#8B0000";
+        const wingColor = isEnraged ? "#ff2200" : "#B22222";
+        const eyeColor = isEnraged ? "#ffff00" : "#ff4444";
+
+        // Body
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath(); ctx.ellipse(bx, by, 22, 16, 0, 0, Math.PI * 2); ctx.fill();
+
+        // Head
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath(); ctx.arc(bx, by - 22, 12, 0, Math.PI * 2); ctx.fill();
+
+        // Snout
+        ctx.fillStyle = isEnraged ? "#990000" : "#6B0000";
+        ctx.beginPath(); ctx.ellipse(bx, by - 30, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+        // Eyes (glowing)
+        ctx.fillStyle = eyeColor;
+        ctx.beginPath(); ctx.arc(bx - 5, by - 24, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bx + 5, by - 24, 3, 0, Math.PI * 2); ctx.fill();
+        // Eye glow
+        ctx.fillStyle = `rgba(255, ${isEnraged ? 255 : 100}, 0, ${0.3 + Math.sin(time / 200) * 0.2})`;
+        ctx.beginPath(); ctx.arc(bx - 5, by - 24, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(bx + 5, by - 24, 5, 0, Math.PI * 2); ctx.fill();
+
+        // Horns
+        ctx.strokeStyle = "#444"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(bx - 8, by - 28); ctx.lineTo(bx - 14, by - 38); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(bx + 8, by - 28); ctx.lineTo(bx + 14, by - 38); ctx.stroke();
+
+        // Wings (flapping animation)
+        const wingFlap = Math.sin(time / 300) * 0.3;
+        ctx.fillStyle = wingColor;
+        // Left wing
+        ctx.save(); ctx.translate(bx - 18, by - 8); ctx.rotate(-0.5 + wingFlap);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-24, -18); ctx.lineTo(-18, 0); ctx.lineTo(-28, 8); ctx.lineTo(0, 6); ctx.closePath(); ctx.fill();
+        ctx.restore();
+        // Right wing
+        ctx.save(); ctx.translate(bx + 18, by - 8); ctx.rotate(0.5 - wingFlap);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(24, -18); ctx.lineTo(18, 0); ctx.lineTo(28, 8); ctx.lineTo(0, 6); ctx.closePath(); ctx.fill();
+        ctx.restore();
+
+        // Tail
+        ctx.strokeStyle = bodyColor; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(bx, by + 12);
+        ctx.quadraticCurveTo(bx + 20, by + 22, bx + 30, by + 14 + Math.sin(time / 400) * 4);
+        ctx.stroke();
+        // Tail spike
+        ctx.fillStyle = "#444";
+        ctx.beginPath(); ctx.moveTo(bx + 30, by + 14 + Math.sin(time / 400) * 4);
+        ctx.lineTo(bx + 36, by + 10); ctx.lineTo(bx + 34, by + 18); ctx.closePath(); ctx.fill();
+
+        // Fire breath particles when enraged
+        if (isEnraged && Math.random() < 0.3) {
+          particlesRef.current.push({
+            x: b.displayX + TILE_SIZE / 2 + (Math.random() - 0.5) * 10,
+            y: b.displayY + TILE_SIZE / 2 - 30,
+            vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2 - 1,
+            life: 400, maxLife: 400,
+            color: Math.random() > 0.4 ? "#ff4400" : "#ffcc00",
+            size: 2 + Math.random() * 3,
+          });
+        }
+
+        ctx.restore();
+
+        // Boss name (red, larger)
+        const bossName = isEnraged ? "🔥 Dragon (Enraged)" : "🐉 Dragon";
+        ctx.font = "bold 13px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillText(bossName, bx + 1, by - 43);
+        ctx.fillStyle = isEnraged ? "#ff4444" : "#ff8800"; ctx.fillText(bossName, bx, by - 44);
+
+        // Boss HP bar (wider)
+        const bossHpW = 60;
+        const bossHpH = 6;
+        const bossHpX = bx - bossHpW / 2;
+        const bossHpY = by - 38;
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(bossHpX - 1, bossHpY - 1, bossHpW + 2, bossHpH + 2);
+        ctx.fillStyle = "#1a1a1a"; ctx.fillRect(bossHpX, bossHpY, bossHpW, bossHpH);
+        const hpRatio = b.maxHp > 0 ? b.hp / b.maxHp : 0;
+        const hpCol = hpRatio > 0.4 ? "#e74c3c" : "#ff0000";
+        ctx.fillStyle = hpCol; ctx.fillRect(bossHpX, bossHpY, bossHpW * hpRatio, bossHpH);
+        // HP text
+        ctx.font = "bold 9px 'Segoe UI', sans-serif";
+        ctx.fillStyle = "#fff"; ctx.fillText(`${b.hp}/${b.maxHp}`, bx, bossHpY + bossHpH - 1);
+      });
+
       /* ── NPCs ────────────────────────────────────────── */
 
       for (const npc of npcsRef.current) {
@@ -1730,14 +1852,30 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       for (const dmg of damageNumbersRef.current) {
         const progress = (now - dmg.time) / DAMAGE_DURATION;
         const alpha = progress > 0.6 ? (1 - progress) / 0.4 : 1;
-        const floatY = dmg.y - camY - progress * 40;
+        // Bounce: starts fast, slows down
+        const bounce = progress < 0.15 ? -Math.sin(progress / 0.15 * Math.PI) * 8 : 0;
+        const floatY = dmg.y - camY - progress * 45 + bounce;
+        // Scale for big hits
+        const isBigHit = dmg.damage >= 30;
+        const sizeBoost = isBigHit ? Math.max(1, 1.5 - progress) : 1;
+        const fontSize = Math.round((isBigHit ? 22 : 16) * sizeBoost);
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.font = "bold 18px 'Segoe UI', sans-serif";
+        ctx.font = `bold ${fontSize}px 'Segoe UI', sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillStyle = dmg.color || "#e74c3c";
         const dmgText = dmg.damage > 0 ? `${dmg.prefix || "-"}${dmg.damage}` : (dmg.prefix || "");
+        // Shadow for readability
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillText(dmgText, dmg.x - camX + 1, floatY + 1);
+        ctx.fillStyle = dmg.color || "#e74c3c";
         ctx.fillText(dmgText, dmg.x - camX, floatY);
+        // Extra glow for big hits
+        if (isBigHit && progress < 0.3) {
+          ctx.globalAlpha = alpha * 0.3;
+          ctx.font = `bold ${fontSize + 4}px 'Segoe UI', sans-serif`;
+          ctx.fillStyle = "#fff";
+          ctx.fillText(dmgText, dmg.x - camX, floatY);
+        }
         ctx.restore();
       }
 
