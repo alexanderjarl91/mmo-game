@@ -1414,6 +1414,20 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.strokeRect(px - TILE_SIZE / 2, py - TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
         }
 
+        // Footstep dust particles when moving
+        if (p.moving && p.hp > 0 && Math.random() < 0.3) {
+          particlesRef.current.push({
+            x: p.displayX + TILE_SIZE / 2 + (Math.random() - 0.5) * 10,
+            y: p.displayY + TILE_SIZE / 2 + 16,
+            vx: (Math.random() - 0.5) * 1.5,
+            vy: -Math.random() * 0.5,
+            life: 15 + Math.random() * 10,
+            maxLife: 25,
+            color: "#c2a46e",
+            size: 2 + Math.random() * 2,
+          });
+        }
+
         // Death fade effect on entire player rendering
         const isDying = p.hp <= 0 && p.deathTime > 0;
         const deathFade = isDying ? Math.max(0.15, 1 - Math.min((now - p.deathTime) / 1500, 1) * 0.85) : 1;
@@ -1484,6 +1498,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.fillStyle = "#1a1a2e"; ctx.fillRect(px - mpW / 2, mpY, mpW, 3);
           const mpRatio = p.maxMp > 0 ? p.mp / p.maxMp : 0;
           ctx.fillStyle = "#3498db"; ctx.fillRect(px - mpW / 2, mpY, mpW * mpRatio, 3);
+        }
+
+        // Weapon glow for equipped weapon
+        if (p.equipWeapon && p.hp > 0) {
+          const weaponItem = ITEMS[p.equipWeapon];
+          if (weaponItem) {
+            ctx.save();
+            const weaponColor = p.equipWeapon === "fire_staff" ? "rgba(255,100,0,0.3)" : p.equipWeapon.includes("bow") ? "rgba(139,69,19,0.2)" : "rgba(200,200,255,0.2)";
+            ctx.fillStyle = weaponColor;
+            const glowSize = 3 + Math.sin(time / 400) * 1;
+            ctx.beginPath();
+            ctx.arc(px + (p.direction === "left" ? -12 : 12), py, glowSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         }
 
         if (isDying) { ctx.restore(); }

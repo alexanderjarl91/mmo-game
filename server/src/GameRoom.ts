@@ -718,6 +718,62 @@ export class GameRoom extends Room<GameState> {
       return;
     }
 
+    // Try boss target
+    const boss = this.state.bosses.get(player.targetId);
+    if (boss && boss.alive) {
+      const d = dist(px, py, boss.x, boss.y);
+      if (d > cfg.range) return;
+      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      boss.hp = Math.max(0, boss.hp - damage);
+
+      if (player.playerClass === "ranger") {
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: boss.x + TILE_SIZE / 2, toY: boss.y, attackerId: client.sessionId });
+      }
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+
+      // Phase change at 40% HP
+      if (boss.hp > 0 && boss.hp <= boss.maxHp * BOSS_PHASE2_HP_RATIO && boss.phase === 1) {
+        boss.phase = 2;
+        this.broadcast("boss_enrage", { bossId: boss.id, bossType: boss.bossType });
+      }
+
+      if (boss.hp <= 0) {
+        boss.alive = false;
+        const bossId = player.targetId;
+        player.targetId = "";
+        player.xp += BOSS_XP;
+        player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
+        const loot = rollLoot("boss");
+        const lootNames: string[] = [];
+        for (const drop of loot) {
+          if (addToInventory(player, drop.itemId, drop.quantity)) {
+            const it = ITEMS[drop.itemId];
+            lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
+          }
+        }
+        if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+        checkLevelUp(player, this, client.sessionId);
+        this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+        this.broadcast("kill", { targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+
+        // Schedule respawn
+        this.clock.setTimeout(() => {
+          this.broadcast("boss_warning", { bossType: boss.bossType, message: `⚠️ The ${boss.bossType === "dragon" ? "Dragon" : "Boss"} stirs in the wilderness...` });
+        }, BOSS_RESPAWN_MS - BOSS_SPAWN_ANNOUNCE_MS);
+        this.clock.setTimeout(() => {
+          boss.hp = BOSS_HP;
+          boss.maxHp = BOSS_HP;
+          boss.phase = 1;
+          boss.x = boss.spawnX;
+          boss.y = boss.spawnY;
+          boss.targetPlayerId = "";
+          boss.alive = true;
+          this.broadcast("boss_spawn", { bossId: boss.id, bossType: boss.bossType });
+        }, BOSS_RESPAWN_MS);
+      }
+      return;
+    }
+
     // Target invalid — clear
     player.targetId = "";
   }
@@ -1247,6 +1303,9 @@ export class GameRoom extends Room<GameState> {
       this.state.skeletons.forEach((skeleton) => {
         if (skeleton.alive && skeleton.x === newX && skeleton.y === newY) monsterBlocking = true;
       });
+      this.state.bosses.forEach((boss) => {
+        if (boss.alive && boss.x === newX && boss.y === newY) monsterBlocking = true;
+      });
       if (monsterBlocking) {
         lastMoveTime.set(client.sessionId, now);
         return;
@@ -1278,8 +1337,9 @@ export class GameRoom extends Room<GameState> {
         const wolf = this.state.wolves.get(tid);
         const goblin = this.state.goblins.get(tid);
         const skeleton = this.state.skeletons.get(tid);
+        const boss = this.state.bosses.get(tid);
         const targetPlayer = this.state.players.get(tid);
-        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
+        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (boss && boss.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId);
         if (!valid) {
           player.targetId = "";
           return;
