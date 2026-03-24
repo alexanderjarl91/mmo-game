@@ -229,16 +229,19 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   useEffect(() => {
     const load = (src: string): Promise<HTMLImageElement> =>
       new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(img); img.src = src; });
-    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png")]).then(([warrior, ranger, npc, grass, grass2]) => {
+    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png"), load("/assets/health_potion.png"), load("/assets/mana_potion.png")]).then(([warrior, ranger, npc, grass, grass2, hpPot, mpPot]) => {
       warriorSpriteRef.current = warrior.complete && warrior.naturalWidth ? warrior : null;
       rangerSpriteRef.current = ranger.complete && ranger.naturalWidth ? ranger : null;
       npcSpriteRef.current = npc.complete && npc.naturalWidth ? npc : null;
       grassTileRef.current = grass.complete && grass.naturalWidth ? grass : null;
       grassTile2Ref.current = grass2.complete && grass2.naturalWidth ? grass2 : null;
+      if (hpPot.complete && hpPot.naturalWidth) itemSpritesRef.current.set("health_potion", hpPot);
+      if (mpPot.complete && mpPot.naturalWidth) itemSpritesRef.current.set("mana_potion", mpPot);
     });
   }, []);
 
   const npcSpriteRef = useRef<HTMLImageElement | null>(null);
+  const itemSpritesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const tintCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   const getClassSprite = (cls: string): HTMLImageElement | null => {
@@ -2064,11 +2067,16 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillStyle = glowColor;
         ctx.fill();
         
-        // Draw item icon
-        ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(icon, dx, dy + bob - 4);
+        // Draw item icon (use sprite if available, otherwise emoji)
+        const itemSprite = itemSpritesRef.current.get(drop.itemId);
+        if (itemSprite) {
+          ctx.drawImage(itemSprite, dx - 14, dy + bob - 18, 28, 28);
+        } else {
+          ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(icon, dx, dy + bob - 4);
+        }
         
         // Draw quantity if > 1
         if (drop.quantity > 1) {

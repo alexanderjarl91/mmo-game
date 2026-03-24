@@ -532,8 +532,10 @@ export class GameRoom extends Room<GameState> {
 
   // Spawn ground loot at a position
   spawnGroundLoot(x: number, y: number, lootTable: string, ownerSessionId: string, goldAmount?: number) {
+    console.log(`[LOOT] spawnGroundLoot called: table=${lootTable} x=${x} y=${y} gold=${goldAmount}`);
     // Roll loot from table
     const drops = rollLoot(lootTable);
+    console.log(`[LOOT] rolled ${drops.length} item drops + gold=${goldAmount}`);
     
     // Spawn gold as a ground item
     if (goldAmount && goldAmount > 0) {
@@ -547,6 +549,7 @@ export class GameRoom extends Room<GameState> {
       item.droppedAt = Date.now();
       item.ownerSessionId = ownerSessionId;
       this.state.droppedItems.set(id, item);
+      console.log(`[LOOT] gold drop spawned: id=${id} qty=${goldAmount} droppedItems size=${this.state.droppedItems.size}`);
       
       // Schedule despawn
       this.clock.setTimeout(() => {
