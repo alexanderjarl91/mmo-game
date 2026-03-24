@@ -229,7 +229,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   useEffect(() => {
     const load = (src: string): Promise<HTMLImageElement> =>
       new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(img); img.src = src; });
-    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png"), load("/assets/health_potion.png"), load("/assets/mana_potion.png")]).then(([warrior, ranger, npc, grass, grass2, hpPot, mpPot]) => {
+    Promise.all([load("/assets/warrior.png"), load("/assets/ranger.png"), load("/assets/character.png"), load("/assets/grass.png"), load("/assets/grass2.png"), load("/assets/health_potion.png"), load("/assets/mana_potion.png"), load("/assets/gold_small.png"), load("/assets/gold_large.png")]).then(([warrior, ranger, npc, grass, grass2, hpPot, mpPot, goldS, goldL]) => {
       warriorSpriteRef.current = warrior.complete && warrior.naturalWidth ? warrior : null;
       rangerSpriteRef.current = ranger.complete && ranger.naturalWidth ? ranger : null;
       npcSpriteRef.current = npc.complete && npc.naturalWidth ? npc : null;
@@ -237,6 +237,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       grassTile2Ref.current = grass2.complete && grass2.naturalWidth ? grass2 : null;
       if (hpPot.complete && hpPot.naturalWidth) itemSpritesRef.current.set("health_potion", hpPot);
       if (mpPot.complete && mpPot.naturalWidth) itemSpritesRef.current.set("mana_potion", mpPot);
+      if (goldS.complete && goldS.naturalWidth) itemSpritesRef.current.set("gold_small", goldS);
+      if (goldL.complete && goldL.naturalWidth) itemSpritesRef.current.set("gold_large", goldL);
     });
   }, []);
 
@@ -2037,56 +2039,41 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const dy = drop.y + TILE_SIZE / 2 - camY;
         if (dx < -40 || dx > w + 40 || dy < -40 || dy > h + 40) return;
         
-        // Floating bob animation
-        const age = time - (drop.droppedAt || 0);
-        const bob = Math.sin(time / 400 + drop.x) * 3;
-        
-        // Glow effect
-        const glowAlpha = 0.3 + Math.sin(time / 500 + drop.y) * 0.15;
         ctx.save();
         
-        // Determine icon/color based on item
-        let icon = "📦";
-        let glowColor = "rgba(255, 215, 0, " + glowAlpha + ")";
-        const it = ITEMS[drop.itemId];
+        // Draw item (sprite if available, otherwise emoji fallback)
         if (drop.itemId === "gold") {
-          icon = "🪙";
-          glowColor = "rgba(255, 215, 0, " + glowAlpha + ")";
-        } else if (it) {
-          icon = it.icon;
-          if (it.equipSlot) {
-            glowColor = "rgba(100, 200, 255, " + glowAlpha + ")"; // blue glow for equipment
+          const spriteKey = drop.quantity > 10 ? "gold_large" : "gold_small";
+          const goldSprite = itemSpritesRef.current.get(spriteKey);
+          if (goldSprite) {
+            ctx.drawImage(goldSprite, dx - 16, dy - 16, 32, 32);
           } else {
-            glowColor = "rgba(50, 255, 50, " + glowAlpha + ")"; // green glow for consumables
+            ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText("🪙", dx, dy);
+          }
+        } else {
+          const itemSprite = itemSpritesRef.current.get(drop.itemId);
+          if (itemSprite) {
+            ctx.drawImage(itemSprite, dx - 14, dy - 14, 28, 28);
+          } else {
+            const it = ITEMS[drop.itemId];
+            ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText(it?.icon || "📦", dx, dy);
           }
         }
         
-        // Draw glow circle
-        ctx.beginPath();
-        ctx.arc(dx, dy + bob - 4, 14, 0, Math.PI * 2);
-        ctx.fillStyle = glowColor;
-        ctx.fill();
-        
-        // Draw item icon (use sprite if available, otherwise emoji)
-        const itemSprite = itemSpritesRef.current.get(drop.itemId);
-        if (itemSprite) {
-          ctx.drawImage(itemSprite, dx - 14, dy + bob - 18, 28, 28);
-        } else {
-          ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(icon, dx, dy + bob - 4);
-        }
-        
-        // Draw quantity if > 1
+        // Draw quantity label
         if (drop.quantity > 1) {
           ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.textAlign = "center";
           ctx.fillStyle = "#fff";
           ctx.strokeStyle = "#000";
           ctx.lineWidth = 2;
           const qText = drop.itemId === "gold" ? `${drop.quantity}g` : `x${drop.quantity}`;
-          ctx.strokeText(qText, dx + 8, dy + bob + 6);
-          ctx.fillText(qText, dx + 8, dy + bob + 6);
+          ctx.strokeText(qText, dx, dy + 18);
+          ctx.fillText(qText, dx, dy + 18);
         }
         
         ctx.restore();
