@@ -9,6 +9,43 @@
 
 ## Features Added
 
+### 23. 🖱️ Click-to-Loot Auto-Walk
+- Click any dropped item on the ground, even if far away
+- Character automatically walks toward the item and picks it up on arrival
+- Manual movement (WASD/arrows/d-pad) cancels auto-walk
+- Clicking another target also cancels the loot walk
+- If the item despawns or is picked up by someone else, walk is cancelled
+
+### 22. 🧹 Z Key — Vacuum Loot Pickup
+- Press **Z** to pick up ALL dropped items on your tile and 8 surrounding tiles
+- Sends a pickup message for each nearby item — no more clicking one by one
+- "Vacuum loot" hotkey for fast post-combat cleanup
+
+### 21. ⚔️ X Key — Attack Adjacent Creature
+- Press **X** to auto-target and attack the closest creature on an adjacent tile (including diagonals)
+- If you already have a target, X does nothing (server handles auto-attack)
+- Melee convenience — no need to click-target first
+- Works with all creature types: slimes, wolves, goblins, skeletons, bosses
+
+### 20. 📋 Character Sheet (C Key)
+- Press **C** to open a detailed character sheet panel
+- Shows: name, class, level, XP bar with progress
+- HP/MP with base + equipment breakdown
+- Attack, Defense, Range stats with base + bonus
+- Full equipment list showing each slot and its bonuses
+- Gold amount
+- Mobile button (📋) added to HUD
+- Close with **C** again or **Escape**
+
+### 19. 📊 Item Stats Tooltips in Inventory
+- Hovering over any item in inventory shows a detailed tooltip
+- **Equipment** shows: ATK, DEF, Max HP, Max MP bonuses
+- **Consumables** shows: HP/MP healing amounts
+- Tooltip follows mouse cursor with smart screen-edge positioning
+- **Mobile**: tap-and-hold (400ms) to show tooltip
+- Works on both inventory grid items and equipped gear slots
+- Sell price shown on all items
+
 ### 18. 🔥 Kill Streak System
 - Track consecutive monster kills without dying
 - **5 milestones:** 🔥 Killing Spree (3) → ⚡ Rampage (5) → 💀 Unstoppable (8) → ☠️ Godlike (12) → 👑 Legendary (20)

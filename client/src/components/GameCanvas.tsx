@@ -170,6 +170,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const worldEventNotifsRef = useRef<Array<{ message: string; time: number; color: string }>>([]);
   const streakBannerRef = useRef<{ title: string; name: string; streak: number; time: number; xpBonus: number; goldBonus: number; isMine: boolean } | null>(null);
   const lastAutoPickupRef = useRef(0);
+  const lootWalkTargetRef = useRef<{ dropId: string; tileX: number; tileY: number } | null>(null);
   const fishingRef = useRef<{ active: boolean; castTime: number; duration: number; result: string | null; resultTime: number }>({ active: false, castTime: 0, duration: 0, result: null, resultTime: 0 });
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
@@ -178,6 +179,9 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const [chatOpen, setChatOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
+  const [tooltipItem, setTooltipItem] = useState<{ itemId: string; x: number; y: number } | null>(null);
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [questLogOpen, setQuestLogOpen] = useState(false);
   const [questDialogOpen, setQuestDialogOpen] = useState(false);
   const [questDialogData, setQuestDialogData] = useState<{ npcId: string; npcName: string; available: any[]; turnIn: any[] } | null>(null);
@@ -1318,22 +1322,39 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       }
     });
 
-    // Check dropped items (click to pick up)
+    // Check dropped items (click to pick up or walk-to-loot)
     let closestDropId = "";
     let closestDropDist = Infinity;
     droppedItemsRef.current.forEach((drop, id) => {
       const ix = drop.x + TILE_SIZE / 2;
       const iy = drop.y + TILE_SIZE / 2;
       const d = Math.sqrt((worldX - ix) ** 2 + (worldY - iy) ** 2);
-      if (d < TILE_SIZE && d < closestDropDist) { closestDropId = id; closestDropDist = d; }
+      if (d < TILE_SIZE * 1.5 && d < closestDropDist) { closestDropId = id; closestDropDist = d; }
     });
     
     if (closestDropId && closestDropDist < bestDist) {
-      roomRef.current?.send("pickup_item", { itemId: closestDropId });
+      const drop = droppedItemsRef.current.get(closestDropId);
+      if (drop) {
+        const myTileX = Math.round(me.serverX / TILE_SIZE);
+        const myTileY = Math.round(me.serverY / TILE_SIZE);
+        const dropTileX = Math.round(drop.x / TILE_SIZE);
+        const dropTileY = Math.round(drop.y / TILE_SIZE);
+        const dx = Math.abs(dropTileX - myTileX);
+        const dy = Math.abs(dropTileY - myTileY);
+        if (dx <= 1 && dy <= 1) {
+          // Close enough — pick up directly
+          roomRef.current?.send("pickup_item", { itemId: closestDropId });
+          lootWalkTargetRef.current = null;
+        } else {
+          // Too far — set auto-walk target
+          lootWalkTargetRef.current = { dropId: closestDropId, tileX: dropTileX, tileY: dropTileY };
+        }
+      }
       return;
     }
 
     if (bestId) {
+      lootWalkTargetRef.current = null; // Cancel any loot-walk
       // If clicking the same target, toggle it off
       const currentTarget = me.targetId || "";
       if (currentTarget === bestId) {
@@ -1342,6 +1363,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         sendSetTarget(bestId);
       }
     } else {
+      lootWalkTargetRef.current = null;
       sendClearTarget();
     }
   }, []);
@@ -1374,6 +1396,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         } else { e.preventDefault(); setChatOpen(true); setTimeout(() => chatInputRef.current?.focus(), 50); return; }
       }
       if (e.key === "Escape" && inventoryOpen) { setInventoryOpen(false); canvasRef.current?.focus(); return; }
+      if (e.key === "Escape" && characterSheetOpen) { setCharacterSheetOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && shopOpen) { setShopOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && questLogOpen) { setQuestLogOpen(false); canvasRef.current?.focus(); return; }
       if (e.key === "Escape" && questDialogOpen) { setQuestDialogOpen(false); canvasRef.current?.focus(); return; }
@@ -1381,7 +1404,58 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (chatOpen) return;
       if (e.key === "Escape" && !chatOpen) { sendClearTarget(); return; }
       if (e.key === "i" || e.key === "I") { setInventoryOpen(prev => !prev); return; }
+      if (e.key === "c" || e.key === "C") { setCharacterSheetOpen(prev => !prev); return; }
       if (e.key === "q" || e.key === "Q") { setQuestLogOpen(prev => !prev); return; }
+      // X key: attack adjacent creature
+      if (e.key === "x" || e.key === "X") {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (!me || me.hp <= 0) return;
+        const myTileX = Math.round(me.serverX / TILE_SIZE);
+        const myTileY = Math.round(me.serverY / TILE_SIZE);
+        // If already targeting something, keep it (server handles auto-attack)
+        if (me.targetId) {
+          // Already targeting — server auto-attacks, nothing to do
+          return;
+        }
+        // Find closest adjacent creature (within 1.5 tiles)
+        let closestId = "";
+        let closestDist = Infinity;
+        const checkCreature = (cx: number, cy: number, id: string, alive: boolean) => {
+          if (!alive) return;
+          const tileX = Math.round(cx / TILE_SIZE);
+          const tileY = Math.round(cy / TILE_SIZE);
+          const dx = Math.abs(tileX - myTileX);
+          const dy = Math.abs(tileY - myTileY);
+          if (dx <= 1 && dy <= 1 && !(dx === 0 && dy === 0)) {
+            const d = Math.sqrt((cx - me.serverX) ** 2 + (cy - me.serverY) ** 2);
+            if (d < closestDist) { closestDist = d; closestId = id; }
+          }
+        };
+        slimesRef.current.forEach((s, id) => checkCreature(s.serverX, s.serverY, id, s.alive));
+        wolvesRef.current.forEach((w, id) => checkCreature(w.serverX, w.serverY, id, w.alive));
+        goblinsRef.current.forEach((g, id) => checkCreature(g.serverX, g.serverY, id, g.alive));
+        skeletonsRef.current.forEach((s, id) => checkCreature(s.serverX, s.serverY, id, s.alive));
+        bossesRef.current.forEach((b, id) => checkCreature(b.serverX, b.serverY, id, b.alive));
+        if (closestId) { sendSetTarget(closestId); }
+        return;
+      }
+      // Z key: vacuum loot nearby
+      if (e.key === "z" || e.key === "Z") {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (!me || me.hp <= 0) return;
+        const myTileX = Math.round(me.serverX / TILE_SIZE);
+        const myTileY = Math.round(me.serverY / TILE_SIZE);
+        droppedItemsRef.current.forEach((drop, id) => {
+          const dropTileX = Math.round(drop.x / TILE_SIZE);
+          const dropTileY = Math.round(drop.y / TILE_SIZE);
+          const dx = Math.abs(dropTileX - myTileX);
+          const dy = Math.abs(dropTileY - myTileY);
+          if (dx <= 1 && dy <= 1) {
+            roomRef.current?.send("pickup_item", { itemId: id });
+          }
+        });
+        return;
+      }
       if (e.key === "f" || e.key === "F") { 
         if (fishingRef.current.active) {
           roomRef.current?.send("fish_cancel");
@@ -1440,7 +1514,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen, questLogOpen, questDialogOpen]);
+  }, [chatOpen, chatText, talkToNearbyNPC, shopOpen, inventoryOpen, characterSheetOpen, questLogOpen, questDialogOpen]);
 
   const handleDpad = (dx: number, dy: number, pressed: boolean) => {
     if (pressed) dpadRef.current = { dx, dy };
@@ -1488,6 +1562,38 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         else if (keys.has("a") || keys.has("ArrowLeft")) dx = -1;
         else if (keys.has("d") || keys.has("ArrowRight")) dx = 1;
         if (dx === 0 && dy === 0) { dx = dpadRef.current.dx; dy = dpadRef.current.dy; }
+        // Cancel loot-walk on manual input
+        if ((dx !== 0 || dy !== 0) && lootWalkTargetRef.current) { lootWalkTargetRef.current = null; }
+        // Auto-walk to loot target if no manual input
+        if (dx === 0 && dy === 0 && lootWalkTargetRef.current) {
+          const me = playersRef.current.get(sessionIdRef.current);
+          if (me && me.hp > 0) {
+            const target = lootWalkTargetRef.current;
+            const drop = droppedItemsRef.current.get(target.dropId);
+            if (!drop) {
+              // Item gone (picked up or despawned)
+              lootWalkTargetRef.current = null;
+            } else {
+              const myTileX = Math.round(me.serverX / TILE_SIZE);
+              const myTileY = Math.round(me.serverY / TILE_SIZE);
+              const dtx = Math.abs(target.tileX - myTileX);
+              const dty = Math.abs(target.tileY - myTileY);
+              if (dtx <= 1 && dty <= 1) {
+                // Arrived — pick up and clear
+                roomRef.current?.send("pickup_item", { itemId: target.dropId });
+                lootWalkTargetRef.current = null;
+              } else {
+                // Step toward target (one axis at a time for clean diagonal movement)
+                if (target.tileX > myTileX) dx = 1;
+                else if (target.tileX < myTileX) dx = -1;
+                if (target.tileY > myTileY) dy = 1;
+                else if (target.tileY < myTileY) dy = -1;
+                // Move one axis at a time for reliability
+                if (dx !== 0 && dy !== 0) { dy = 0; }
+              }
+            }
+          }
+        }
         if (dx !== 0 || dy !== 0) { sendMove(dx, dy); lastMoveTimeRef.current = now; }
       }
 
@@ -3371,6 +3477,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <span style={{ color: "#f1c40f", fontWeight: "bold", fontSize: 13 }}>💰 {myStats.gold}</span>
             <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setInventoryOpen(prev => !prev); }}>🎒</div>
+            <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setCharacterSheetOpen(prev => !prev); }}>📋</div>
             <div style={{ ...btnStyle, width: 40, height: 40, fontSize: 16, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); setQuestLogOpen(prev => !prev); }}>📜</div>
           </div>
         </div>
@@ -3453,8 +3560,16 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
                       cursor: equipped ? "pointer" : "default", minHeight: SLOT_PX,
                     }}
-                    title={equipped ? `${equipped.name} — click to unequip` : es.label}
                     onClick={() => { if (equipped) { roomRef.current?.send("unequip_item", { slot: es.slot }); sfxEquip(); } }}
+                    onMouseEnter={(ev) => { if (es.itemId) setTooltipItem({ itemId: es.itemId, x: ev.clientX, y: ev.clientY }); }}
+                    onMouseLeave={() => setTooltipItem(null)}
+                    onTouchStart={(ev) => {
+                      if (es.itemId) {
+                        const t = ev.touches[0];
+                        tooltipTimerRef.current = setTimeout(() => setTooltipItem({ itemId: es.itemId, x: t.clientX, y: t.clientY }), 400);
+                      }
+                    }}
+                    onTouchEnd={() => { if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current); setTooltipItem(null); }}
                     >
                       <span style={{ fontSize: 20 }}>{equipped ? equipped.icon : es.icon}</span>
                       <span style={{ fontSize: 8, color: equipped ? "#2ecc71" : "#555", marginTop: 2 }}>{es.label}</span>
@@ -3484,7 +3599,6 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                       position: "relative", cursor: slot ? "pointer" : "default",
                       transition: "background 0.15s",
                     }}
-                    title={item ? (isEquippable ? `${item.name} — click to equip` : item.name) : ""}
                     onClick={() => {
                       if (slot && item) {
                         if (item.equipSlot) {
@@ -3495,8 +3609,24 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                         }
                       }
                     }}
-                    onMouseOver={(e) => { if (slot) e.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.25)" : "rgba(139,92,246,0.3)"; }}
-                    onMouseOut={(e) => { if (slot) e.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.1)" : "rgba(139,92,246,0.15)"; }}
+                    onMouseEnter={(ev) => {
+                      if (slot) {
+                        setTooltipItem({ itemId: slot.itemId, x: ev.clientX, y: ev.clientY });
+                        ev.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.25)" : "rgba(139,92,246,0.3)";
+                      }
+                    }}
+                    onMouseMove={(ev) => { if (slot) setTooltipItem({ itemId: slot.itemId, x: ev.clientX, y: ev.clientY }); }}
+                    onMouseLeave={(e) => {
+                      setTooltipItem(null);
+                      if (slot) e.currentTarget.style.background = isEquippable ? "rgba(46,204,113,0.1)" : "rgba(139,92,246,0.15)";
+                    }}
+                    onTouchStart={(ev) => {
+                      if (slot) {
+                        const t = ev.touches[0];
+                        tooltipTimerRef.current = setTimeout(() => setTooltipItem({ itemId: slot.itemId, x: t.clientX, y: t.clientY }), 400);
+                      }
+                    }}
+                    onTouchEnd={() => { if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current); setTooltipItem(null); }}
                     >
                       {item && (
                         <>
@@ -3532,6 +3662,191 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
                   border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
                   color: "#94a3b8", cursor: "pointer", fontSize: 12,
                 }}>Close (I)</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Item tooltip */}
+      {tooltipItem && (() => {
+        const item = ITEMS[tooltipItem.itemId];
+        if (!item) return null;
+        const stats: string[] = [];
+        if (item.effect?.hp) stats.push(`❤️ +${item.effect.hp} HP`);
+        if (item.effect?.mp) stats.push(`💙 +${item.effect.mp} MP`);
+        if (item.equipBonus?.atk) stats.push(`⚔️ +${item.equipBonus.atk} ATK`);
+        if (item.equipBonus?.def) stats.push(`🛡️ +${item.equipBonus.def} DEF`);
+        if (item.equipBonus?.maxHp) stats.push(`❤️ +${item.equipBonus.maxHp} Max HP`);
+        if (item.equipBonus?.maxMp) stats.push(`💙 +${item.equipBonus.maxMp} Max MP`);
+        const typeLabel = item.equipSlot ? `Equipment (${item.equipSlot})` : item.effect ? "Consumable" : "Material";
+        const typeColor = item.equipSlot ? "#2ecc71" : item.effect ? "#8b5cf6" : "#f39c12";
+        return (
+          <div style={{
+            position: "fixed", left: Math.min(tooltipItem.x + 12, window.innerWidth - 220),
+            top: Math.max(tooltipItem.y - 10, 10),
+            background: "linear-gradient(135deg, #1a1a2e 0%, #0f1923 100%)",
+            border: "2px solid #8b5cf6", borderRadius: 8, padding: "10px 14px",
+            minWidth: 180, maxWidth: 220, zIndex: 50, pointerEvents: "none",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.6)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 20 }}>{item.icon}</span>
+              <div>
+                <div style={{ color: "#fff", fontWeight: "bold", fontSize: 13 }}>{item.name}</div>
+                <div style={{ color: typeColor, fontSize: 10 }}>{typeLabel}</div>
+              </div>
+            </div>
+            {stats.length > 0 && (
+              <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 6, marginTop: 2 }}>
+                {stats.map((s, i) => (
+                  <div key={i} style={{ color: "#7ec8e3", fontSize: 11, lineHeight: 1.6 }}>{s}</div>
+                ))}
+              </div>
+            )}
+            {item.sellPrice > 0 && (
+              <div style={{ color: "#f1c40f", fontSize: 10, marginTop: 4 }}>Sell: {item.sellPrice}g</div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Character Sheet overlay */}
+      {characterSheetOpen && (() => {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (!me) return null;
+        const currentXp = me.xp;
+        const currentLevelXp = xpForLevel(me.level);
+        const nextLevelXp = xpForLevel(me.level + 1);
+        const xpIntoLevel = currentXp - currentLevelXp;
+        const xpNeeded = nextLevelXp - currentLevelXp;
+        const xpPct = Math.min(1, Math.max(0, xpIntoLevel / xpNeeded));
+        // Calc total bonuses from equipment
+        const equipIds = [me.equipWeapon, me.equipHelmet, me.equipChest, me.equipLegs, me.equipBoots].filter(Boolean);
+        let totalAtk = 0, totalDef = 0, totalMaxHp = 0, totalMaxMp = 0;
+        equipIds.forEach(id => {
+          const it = ITEMS[id];
+          if (it?.equipBonus) {
+            totalAtk += it.equipBonus.atk || 0;
+            totalDef += it.equipBonus.def || 0;
+            totalMaxHp += it.equipBonus.maxHp || 0;
+            totalMaxMp += it.equipBonus.maxMp || 0;
+          }
+        });
+        // Base stats by class
+        const isRanger = me.playerClass === "ranger";
+        const baseAtk = isRanger ? 8 : 12;
+        const baseDef = 0;
+        const baseRange = isRanger ? 5 : 1;
+        const baseMaxHp = 100 + (me.level - 1) * 20;
+        const baseMaxMp = 50 + (me.level - 1) * 10;
+        const equipSlotLabels: Array<{ slot: string; label: string; icon: string; itemId: string }> = [
+          { slot: "weapon", label: "Weapon", icon: "⚔️", itemId: me.equipWeapon },
+          { slot: "helmet", label: "Head", icon: "🪖", itemId: me.equipHelmet },
+          { slot: "chest", label: "Chest", icon: "🦺", itemId: me.equipChest },
+          { slot: "legs", label: "Legs", icon: "👖", itemId: me.equipLegs },
+          { slot: "boots", label: "Feet", icon: "👡", itemId: me.equipBoots },
+        ];
+        return (
+          <div style={{
+            position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+            background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 30,
+          }} onClick={() => setCharacterSheetOpen(false)}>
+            <div style={{
+              background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+              border: "2px solid #e67e22", borderRadius: 12, padding: 20,
+              minWidth: 340, maxWidth: 420,
+            }} onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <h2 style={{ color: "#e67e22", margin: 0, fontSize: 18 }}>📋 Character Sheet</h2>
+                <span style={{ color: "#f1c40f", fontSize: 13 }}>💰 {me.gold}g</span>
+              </div>
+
+              {/* Name/Class/Level */}
+              <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+                <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{me.name} {me.isHardcore && "💀"}</div>
+                <div style={{ color: "#aaa", fontSize: 12 }}>Level {me.level} {isRanger ? "🏹 Ranger" : "⚔️ Warrior"}</div>
+                {/* XP bar */}
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#888", marginBottom: 2 }}>
+                    <span>XP</span>
+                    <span>{xpIntoLevel} / {xpNeeded}</span>
+                  </div>
+                  <div style={{ height: 6, background: "#333", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ width: `${xpPct * 100}%`, height: "100%", background: "linear-gradient(90deg, #f39c12, #e67e22)", borderRadius: 3, transition: "width 0.3s" }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Vitals */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                <div style={{ background: "rgba(231,76,60,0.1)", border: "1px solid rgba(231,76,60,0.3)", borderRadius: 6, padding: "8px 12px" }}>
+                  <div style={{ color: "#e74c3c", fontSize: 10 }}>❤️ HP</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{me.hp} / {me.maxHp}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>Base {baseMaxHp} + Equip {totalMaxHp}</div>
+                </div>
+                <div style={{ background: "rgba(52,152,219,0.1)", border: "1px solid rgba(52,152,219,0.3)", borderRadius: 6, padding: "8px 12px" }}>
+                  <div style={{ color: "#3498db", fontSize: 10 }}>💙 MP</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 15 }}>{me.mp} / {me.maxMp}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>Base {baseMaxMp} + Equip {totalMaxMp}</div>
+                </div>
+              </div>
+
+              {/* Combat stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
+                  <div style={{ color: "#e74c3c", fontSize: 10 }}>⚔️ Attack</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseAtk + totalAtk}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>{baseAtk} + {totalAtk}</div>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
+                  <div style={{ color: "#3498db", fontSize: 10 }}>🛡️ Defense</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseDef + totalDef}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>{baseDef} + {totalDef}</div>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
+                  <div style={{ color: "#f39c12", fontSize: 10 }}>🎯 Range</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseRange}</div>
+                  <div style={{ color: "#888", fontSize: 9 }}>{isRanger ? "Ranged" : "Melee"}</div>
+                </div>
+              </div>
+
+              {/* Equipment */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ color: "#aaa", fontSize: 10, marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Equipment</div>
+                {equipSlotLabels.map((es) => {
+                  const equipped = es.itemId ? ITEMS[es.itemId] : null;
+                  return (
+                    <div key={es.slot} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "4px 8px", marginBottom: 2,
+                      background: equipped ? "rgba(46,204,113,0.08)" : "transparent",
+                      borderRadius: 4,
+                    }}>
+                      <span style={{ fontSize: 14, width: 24, textAlign: "center" }}>{equipped ? equipped.icon : es.icon}</span>
+                      <span style={{ color: "#888", fontSize: 10, width: 50 }}>{es.label}</span>
+                      <span style={{ color: equipped ? "#fff" : "#444", fontSize: 11, flex: 1 }}>
+                        {equipped ? equipped.name : "— Empty —"}
+                      </span>
+                      {equipped?.equipBonus && (
+                        <span style={{ color: "#7ec8e3", fontSize: 9 }}>
+                          {[equipped.equipBonus.atk && `+${equipped.equipBonus.atk} ATK`, equipped.equipBonus.def && `+${equipped.equipBonus.def} DEF`, equipped.equipBonus.maxHp && `+${equipped.equipBonus.maxHp} HP`].filter(Boolean).join(" ")}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Close */}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button onClick={() => setCharacterSheetOpen(false)} style={{
+                  padding: "5px 14px", borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
+                  color: "#94a3b8", cursor: "pointer", fontSize: 12,
+                }}>Close (C)</button>
               </div>
             </div>
           </div>
