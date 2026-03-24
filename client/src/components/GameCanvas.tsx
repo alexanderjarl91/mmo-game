@@ -1570,7 +1570,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.font = "bold 18px 'Segoe UI', sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = dmg.color || "#e74c3c";
-        ctx.fillText(`${dmg.prefix || "-"}${dmg.damage}`, dmg.x - camX, floatY);
+        const dmgText = dmg.damage > 0 ? `${dmg.prefix || "-"}${dmg.damage}` : (dmg.prefix || "");
+        ctx.fillText(dmgText, dmg.x - camX, floatY);
         ctx.restore();
       }
 
