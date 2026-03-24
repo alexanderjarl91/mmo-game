@@ -41,8 +41,5 @@ export class PlayerState extends Schema {
   @type("number") buffWarCryAtk: number = 0; // bonus attack from War Cry
   // Quest system
   @type([QuestSlot]) quests = new ArraySchema<QuestSlot>();
-  // Kill streak (synced for visual effects)
-  @type("number") killStreak: number = 0;
-  @type("number") bestKillStreak: number = 0;
   completedQuestIds: Set<string> = new Set(); // not synced via schema, tracked server-side
 }

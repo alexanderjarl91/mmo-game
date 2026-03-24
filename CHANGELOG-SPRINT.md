@@ -1,5 +1,21 @@
 # 🎮 Creative Sprint Changelog
 
+## Cleanup — Removed Day/Night Cycle & Kill Streaks
+
+### 🌞 Removed Day/Night Cycle
+- Removed the 10-minute day/night cycle overlay (dawn/day/dusk/night tinting)
+- Removed the time-of-day indicator text (🌅 Dawn / ☀️ Day / 🌇 Dusk / 🌙 Night)
+- Game now always appears as permanent daytime — no more darkness overlays
+- `const time = 0` in buildTileCache left untouched (unrelated)
+
+### 🔥 Removed Kill Streak System
+- Removed server-side kill streak tracking (`killStreak`, `bestKillStreak` on PlayerState)
+- Removed `STREAK_MILESTONES` constant and all milestone XP/gold bonus awards
+- Removed `kill_streak` and `streak_ended` message broadcasts
+- Removed client-side streak banner (dramatic center-screen announcement)
+- Removed kill streak indicator above player names (🔥 X kills)
+- Removed streak-related kill feed entries and camera shake on big streaks
+
 ## UI Polish & QoL Fixes
 
 ### 🔢 No Decimals in HP/MP
