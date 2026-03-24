@@ -1356,18 +1356,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         return;
       }
       if (e.key === "3") {
+        // Slot 3: Frost Arrow (ranger) / Shield Wall (warrior)
         const me = playersRef.current.get(sessionIdRef.current);
         if (me?.playerClass === "ranger") roomRef.current?.send("frost_arrow");
         else roomRef.current?.send("shield_wall");
         return;
       }
       if (e.key === "4") {
+        // Slot 4: Rain of Arrows (ranger) / War Cry (warrior)
         const me = playersRef.current.get(sessionIdRef.current);
         if (me?.playerClass === "ranger") roomRef.current?.send("rain_of_arrows");
         else roomRef.current?.send("war_cry");
         return;
       }
       if (e.key === "5") {
+        // Slot 5: Health Potion
         const now = Date.now();
         if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
           roomRef.current?.send("use_potion", { itemId: "health_potion" });
@@ -1376,6 +1379,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         return;
       }
       if (e.key === "6") {
+        // Slot 6: Mana Potion
         const now = Date.now();
         if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
           roomRef.current?.send("use_potion", { itemId: "mana_potion" });
@@ -2848,16 +2852,48 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
         const isRanger = me.playerClass === "ranger";
         const ATTACK_SPELL_COST = 30;
+        const cdNow = Date.now();
+        const getCooldownPct = (ability: string): number => {
+          const endTime = abilityCooldownsRef.current.get(ability);
+          if (!endTime || cdNow >= endTime) return 0;
+          // Estimate total cooldown from known durations
+          const durations: Record<string, number> = { shield_wall: 20000, war_cry: 25000, frost_arrow: 12000, rain_of_arrows: 18000 };
+          const total = durations[ability] || 15000;
+          const remaining = endTime - cdNow;
+          return Math.min(1, remaining / total);
+        };
+        const isOnCooldown = (ability: string): boolean => {
+          const endTime = abilityCooldownsRef.current.get(ability);
+          return !!endTime && cdNow < endTime;
+        };
+
         const spells = [
-          { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp },
-          { key: "2", icon: isRanger ? "🏹" : "⚔️", name: isRanger ? "P.Shot" : "Cleave", cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (isRanger ? !!me.targetId : true) },
-          { key: "3", icon: "❤️", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0) },
-          { key: "4", icon: "💙", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0) },
+          { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp, cooldownPct: 0 },
+          { key: "2", icon: isRanger ? "🏹" : "⚔️", name: isRanger ? "P.Shot" : "Cleave", cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (isRanger ? !!me.targetId : true), cooldownPct: 0 },
+          { key: "3", icon: isRanger ? "❄️" : "🛡️", name: isRanger ? "Frost" : "Shield",
+            cost: isRanger ? 25 : 40, active: true,
+            canUse: me.mp >= (isRanger ? 25 : 40) && !isOnCooldown(isRanger ? "frost_arrow" : "shield_wall") && (isRanger ? !!me.targetId : true),
+            cooldownPct: getCooldownPct(isRanger ? "frost_arrow" : "shield_wall"),
+            cdAbility: isRanger ? "frost_arrow" : "shield_wall",
+          },
+          { key: "4", icon: isRanger ? "🌧️" : "📢", name: isRanger ? "Rain" : "WarCry",
+            cost: isRanger ? 45 : 35, active: true,
+            canUse: me.mp >= (isRanger ? 45 : 35) && !isOnCooldown(isRanger ? "rain_of_arrows" : "war_cry") && (isRanger ? !!me.targetId : true),
+            cooldownPct: getCooldownPct(isRanger ? "rain_of_arrows" : "war_cry"),
+            cdAbility: isRanger ? "rain_of_arrows" : "war_cry",
+          },
+          { key: "5", icon: "❤️", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
+          { key: "6", icon: "💙", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
         ];
 
+        // Recalculate bar dimensions for 6 slots
+        const SLOT_COUNT_REAL = spells.length;
+        const barWReal = SLOT_COUNT_REAL * SLOT_SIZE + (SLOT_COUNT_REAL - 1) * SLOT_GAP;
+        const barXReal = Math.floor(w / 2 - barWReal / 2);
+
         for (let i = 0; i < spells.length; i++) {
-          const spell = spells[i];
-          const sx = barX + i * (SLOT_SIZE + SLOT_GAP);
+          const spell = spells[i] as any;
+          const sx = barXReal + i * (SLOT_SIZE + SLOT_GAP);
 
           // Slot background
           ctx.fillStyle = spell.active ? "rgba(0,0,0,0.7)" : "rgba(0,0,0,0.4)";
@@ -2865,39 +2901,75 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
           ctx.fill();
 
-          // Border
-          ctx.strokeStyle = spell.canUse ? "rgba(46,204,113,0.8)" : spell.active ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)";
+          // Cooldown sweep overlay (clock-sweep from top)
+          if (spell.cooldownPct > 0) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
+            ctx.clip();
+
+            const cx = sx + SLOT_SIZE / 2;
+            const cy = barBY + SLOT_SIZE / 2;
+            const r = SLOT_SIZE;
+            const startAngle = -Math.PI / 2;
+            const sweepAngle = spell.cooldownPct * Math.PI * 2;
+
+            ctx.fillStyle = "rgba(0,0,0,0.55)";
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, r, startAngle, startAngle + sweepAngle);
+            ctx.closePath();
+            ctx.fill();
+
+            // Cooldown seconds remaining
+            const cdEnd = abilityCooldownsRef.current.get(spell.cdAbility || "");
+            if (cdEnd) {
+              const secLeft = Math.ceil((cdEnd - cdNow) / 1000);
+              if (secLeft > 0) {
+                ctx.font = "bold 16px 'Segoe UI', sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillStyle = "rgba(255,255,255,0.9)";
+                ctx.fillText(`${secLeft}`, cx, cy + 6);
+              }
+            }
+            ctx.restore();
+          }
+
+          // Border (green if usable, orange if on cooldown, gray otherwise)
+          ctx.strokeStyle = spell.canUse ? "rgba(46,204,113,0.8)" : spell.cooldownPct > 0 ? "rgba(243,156,18,0.6)" : spell.active ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)";
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.roundRect(sx, barBY, SLOT_SIZE, SLOT_SIZE, 6);
           ctx.stroke();
 
-          // Icon
+          // Icon (dim if on cooldown)
           if (spell.icon) {
             ctx.font = "22px serif";
             ctx.textAlign = "center";
-            ctx.globalAlpha = spell.canUse ? 1 : 0.4;
+            ctx.globalAlpha = spell.cooldownPct > 0 ? 0.3 : spell.canUse ? 1 : 0.4;
             ctx.fillText(spell.icon, sx + SLOT_SIZE / 2, barBY + 28);
             ctx.globalAlpha = 1;
-          } else {
-            // Empty slot
-            ctx.font = "18px serif";
-            ctx.textAlign = "center";
-            ctx.fillStyle = "rgba(255,255,255,0.1)";
-            ctx.fillText("—", sx + SLOT_SIZE / 2, barBY + 28);
           }
 
           // Mana cost or potion count
-          if (spell.active && spell.cost > 0) {
+          if (spell.active && spell.cost > 0 && spell.cooldownPct === 0) {
             ctx.font = "9px 'Segoe UI', sans-serif";
             ctx.fillStyle = spell.canUse ? "#7ec8e3" : "rgba(126,200,227,0.4)";
             ctx.textAlign = "center";
             ctx.fillText(`${spell.cost} MP`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
-          } else if (spell.active && (spell as any).count !== undefined) {
+          } else if (spell.active && spell.count !== undefined) {
             ctx.font = "bold 10px 'Segoe UI', sans-serif";
-            ctx.fillStyle = (spell as any).count > 0 ? "#f1c40f" : "rgba(241,196,15,0.3)";
+            ctx.fillStyle = spell.count > 0 ? "#f1c40f" : "rgba(241,196,15,0.3)";
             ctx.textAlign = "center";
-            ctx.fillText(`×${(spell as any).count}`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
+            ctx.fillText(`×${spell.count}`, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
+          }
+
+          // Ability name (below icon for new abilities)
+          if (i >= 2 && i <= 3 && spell.cooldownPct === 0) {
+            ctx.font = "7px 'Segoe UI', sans-serif";
+            ctx.fillStyle = "rgba(255,255,255,0.4)";
+            ctx.textAlign = "center";
+            ctx.fillText(spell.name, sx + SLOT_SIZE / 2, barBY + SLOT_SIZE - 5);
           }
 
           // Key number
@@ -2911,7 +2983,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
       if (!isMobile) {
         ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.font = "12px monospace"; ctx.textAlign = "right";
-        ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | M: Mute | Enter: Chat | Esc: Untarget", w - 10, 20);
+        ctx.fillText("WASD: Move | Click: Target | E: Talk | 1-6: Abilities | M: Mute | Enter: Chat | Esc: Untarget", w - 10, 20);
       }
 
       // Sound indicator
