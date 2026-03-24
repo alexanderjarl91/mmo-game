@@ -1,5 +1,12 @@
 # 🎮 Creative Sprint Changelog
 
+## Bug Fixes
+
+### 🐛 Fix: Client crash on droppedItems/worldEvents schema listeners
+- Fixed `undefined is not an object (evaluating 'k.state.droppedItems.onAdd')` crash
+- Added null guards around `.onAdd()` / `.onRemove()` listeners for `droppedItems` and `worldEvents` MapSchema properties
+- Root cause: client tried to attach listeners before schema properties were synced from server
+
 ## Features Added
 
 ### 18. 🔥 Kill Streak System
