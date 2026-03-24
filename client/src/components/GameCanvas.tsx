@@ -1704,7 +1704,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
 
       if (!isMobile) {
         ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.font = "12px monospace"; ctx.textAlign = "right";
-        ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | Enter: Chat | Esc: Untarget", w - 10, 20);
+        ctx.fillText("WASD: Move | Click: Target | E: Talk | 1: Heal | M: Mute | Enter: Chat | Esc: Untarget", w - 10, 20);
+      }
+
+      // Sound indicator
+      if (isMuted()) {
+        ctx.font = "11px 'Segoe UI', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.textAlign = "left";
+        ctx.fillText("🔇 Muted (M)", 10, 52);
       }
 
       /* ── Day/Night cycle overlay ─────────────────────── */
