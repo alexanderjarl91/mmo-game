@@ -1,5 +1,48 @@
 # 🎮 Creative Sprint Changelog
 
+## Class System Overhaul — 4 Classes with Distinct Progression
+
+### 🗡️ 4-Class System with Unique Stats
+- Expanded from 2 classes (Warrior/Ranger) to **4 classes**: Warrior, Ranger, Mage, Rogue
+- Each class has unique base stats and per-level growth rates for: HP, MP, ATK, DEF, Range, Attack Speed, Crit %, Dodge %, MP Regen
+- **Warrior** — Tank. HP 130, DEF 8, ATK 22, 1.1s speed. Highest defense scaling (+3/level)
+- **Ranger** — Ranged DPS. HP 85, Range 4, Crit 8%, 1.4s speed. Good crit scaling
+- **Mage** — Spell Caster. HP 70, MP 100, MP Regen 8/5s, Range 3. Massive MP pool and regen
+- **Rogue** — Melee DPS. HP 80, ATK 18, 0.9s speed, Crit 10%, Dodge 8%. Fastest attacks, highest crit & dodge
+
+### ⚔️ Crit & Dodge Mechanics
+- **Critical Hits**: Players roll against their crit chance on every attack. Crits deal **1.5x damage** and display with gold/yellow color and "CRIT!" prefix in larger font
+- **Dodge**: When receiving damage from mobs or PvP, players roll against dodge chance. Dodged attacks deal **0 damage** and show "DODGE" in cyan floating text
+- Dodge prevents status effects (poison, burn) from being applied on that hit
+- Both stats scale with level: `base + (level - 1) * perLevel`
+
+### 🔄 Class-Based MP Regeneration
+- Replaced flat 2 MP/tick regen with class-specific regen rates (mpRegen per 5 seconds)
+- Warrior: 2/5s, Ranger: 4/5s, **Mage: 8/5s**, Rogue: 3/5s — Mage regens 4x faster than Warrior
+- Temple 10x multiplier still applies
+
+### 🛡️ Base Defense System
+- Defense is no longer equipment-only. Classes now have base defense + per-level growth
+- Formula: `defBase + (level - 1) * defPerLevel + equipBonus`
+- Warrior scales +3 DEF/level; others scale +1/level
+- PvP now properly runs through defense calculation
+
+### 📋 Enhanced Character Sheet
+- Shows all new stats: Crit %, Dodge %, MP Regen, Attack Speed
+- 4-column layout for Attack/Defense/Range/Attack Speed
+- Secondary row for Crit/Dodge/MP Regen with themed colors
+- Class display now shows correct icon and name for all 4 classes
+
+### 🎭 Character Creation
+- Class selection screen shows all 4 classes with descriptions and key stats
+- Mage (🔮) and Rogue (🗡️) tiles with unique color themes
+- Mage uses Ranger abilities (ranged), Rogue uses Warrior abilities (melee)
+
+### 🔧 Code Quality
+- Centralized level-up logic into `checkLevelUp()` method — eliminated 5 duplicate inline level-up blocks
+- Added `calcPlayerDamage()` helper with built-in crit rolling
+- All stat scaling uses class config growth rates instead of hardcoded values
+
 ## Bug Fixes
 
 ### 🐛 Fix: Client crash on droppedItems/worldEvents schema listeners

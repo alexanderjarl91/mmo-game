@@ -24,7 +24,7 @@ function getSavedCharacter(): SavedCharacter | null {
 export default function LoginScreen({ onPlay }: Props) {
   const [saved, setSaved] = useState<SavedCharacter | null>(null);
   const [name, setName] = useState("");
-  const [playerClass, setPlayerClass] = useState<"warrior" | "ranger">("warrior");
+  const [playerClass, setPlayerClass] = useState<"warrior" | "ranger" | "mage" | "rogue">("warrior");
   const [showNew, setShowNew] = useState(false);
   const [isHardcore, setIsHardcore] = useState(false);
 
@@ -33,7 +33,7 @@ export default function LoginScreen({ onPlay }: Props) {
     if (s) {
       setSaved(s);
       setName(s.name);
-      setPlayerClass(s.playerClass as "warrior" | "ranger");
+      setPlayerClass(s.playerClass as "warrior" | "ranger" | "mage" | "rogue");
     } else {
       setShowNew(true);
     }
@@ -56,20 +56,34 @@ export default function LoginScreen({ onPlay }: Props) {
     setPlayerClass("warrior");
   };
 
-  const classInfo = {
+  const classInfo: Record<string, { icon: string; name: string; desc: string; stats: string; color: string }> = {
     warrior: {
       icon: "⚔️",
       name: "Warrior",
-      desc: "Melee fighter. Must be adjacent to attack. High HP & damage.",
-      stats: "HP: 120 | ATK: 30 | Range: 1",
+      desc: "Tank. High HP & Defense. Absorbs damage.",
+      stats: "HP: 130 | ATK: 22 | DEF: 8 | SPD: 1.1s",
       color: "#e74c3c",
     },
     ranger: {
       icon: "🏹",
       name: "Ranger",
-      desc: "Ranged attacker. Shoots arrows from distance. Lower HP.",
-      stats: "HP: 80 | ATK: 20 | Range: 4",
+      desc: "Ranged DPS. Strikes from distance. Good crits.",
+      stats: "HP: 85 | ATK: 20 | Range: 4 | Crit: 8%",
       color: "#2ecc71",
+    },
+    mage: {
+      icon: "🔮",
+      name: "Mage",
+      desc: "Spell Caster. Huge MP pool. Devastating abilities.",
+      stats: "HP: 70 | ATK: 10 | MP: 100 | Regen: 8/5s",
+      color: "#9b59b6",
+    },
+    rogue: {
+      icon: "🗡️",
+      name: "Rogue",
+      desc: "Melee DPS. Fast attacks. High crit & dodge.",
+      stats: "HP: 80 | ATK: 18 | Crit: 10% | Dodge: 8%",
+      color: "#f39c12",
     },
   };
 
@@ -156,7 +170,7 @@ export default function LoginScreen({ onPlay }: Props) {
         <>
           {/* Class selection */}
           <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap", justifyContent: "center" }}>
-            {(["warrior", "ranger"] as const).map((cls) => {
+            {(["warrior", "ranger", "mage", "rogue"] as const).map((cls) => {
               const info = classInfo[cls];
               const selected = playerClass === cls;
               return (

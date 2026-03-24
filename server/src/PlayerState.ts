@@ -28,6 +28,10 @@ export class PlayerState extends Schema {
   @type("string") equipLegs: string = "";
   @type("string") equipBoots: string = "";
   @type("number") defense: number = 0; // total defense from equipment
+  @type("number") critChance: number = 0; // crit % 
+  @type("number") dodgeChance: number = 0; // dodge %
+  @type("number") mpRegen: number = 0; // MP regen per 5s
+  @type("number") attackInterval: number = 1000; // attack speed in ms
   // Status effects (synced to client for visuals)
   @type("string") statusEffect: string = ""; // "poison" | "burn" | "" 
   @type("number") statusEffectEnd: number = 0; // server timestamp when effect expires

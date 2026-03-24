@@ -182,10 +182,14 @@ function recalcEquipBonuses(player: PlayerState) {
     bonusMaxHp += item.equipBonus.maxHp || 0;
     bonusMaxMp += item.equipBonus.maxMp || 0;
   }
-  player.attack = cfg.attackBase + (level - 1) * 5 + bonusAtk + player.buffWarCryAtk;
-  player.defense = bonusDef;
-  const newMaxHp = cfg.hpBase + (level - 1) * 20 + bonusMaxHp;
-  const newMaxMp = cfg.mpBase + (level - 1) * 10 + bonusMaxMp;
+  player.attack = cfg.attackBase + (level - 1) * cfg.atkPerLevel + bonusAtk + player.buffWarCryAtk;
+  player.defense = cfg.defBase + (level - 1) * cfg.defPerLevel + bonusDef;
+  player.critChance = cfg.critBase + (level - 1) * cfg.critPerLevel;
+  player.dodgeChance = cfg.dodgeBase + (level - 1) * cfg.dodgePerLevel;
+  player.mpRegen = cfg.mpRegenBase + (level - 1) * cfg.mpRegenPerLevel;
+  player.attackInterval = cfg.attackInterval;
+  const newMaxHp = cfg.hpBase + (level - 1) * cfg.hpPerLevel + bonusMaxHp;
+  const newMaxMp = cfg.mpBase + (level - 1) * cfg.mpPerLevel + bonusMaxMp;
   // Don't let current HP/MP exceed new max
   player.maxHp = newMaxHp;
   player.maxMp = newMaxMp;
@@ -228,14 +232,33 @@ function applyStatusEffect(player: PlayerState, effect: "poison" | "burn", durat
   player.statusEffectEnd = Date.now() + durationMs;
 }
 
-function applyDefense(rawDamage: number, defense: number, player?: PlayerState): number {
+function applyDefense(rawDamage: number, defense: number, player?: PlayerState): { damage: number; dodged: boolean } {
+  // Dodge check
+  if (player && player.dodgeChance > 0) {
+    if (Math.random() * 100 < player.dodgeChance) {
+      return { damage: 0, dodged: true };
+    }
+  }
   // Defense reduces damage: dmg * 100 / (100 + defense)
   let dmg = Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
   // Shield Wall reduction
   if (player && player.buffShieldWallEnd > Date.now()) {
     dmg = Math.max(1, Math.floor(dmg * (1 - SHIELD_WALL_REDUCTION)));
   }
-  return dmg;
+  return { damage: dmg, dodged: false };
+}
+
+function rollCrit(critChance: number, damage: number): { damage: number; isCrit: boolean } {
+  if (Math.random() * 100 < critChance) {
+    return { damage: Math.floor(damage * 1.5), isCrit: true };
+  }
+  return { damage, isCrit: false };
+}
+
+// Calculate player damage with crit check. Variance is +/- 5 random.
+function calcPlayerDamage(player: PlayerState, multiplier: number = 1): { damage: number; isCrit: boolean } {
+  const baseDmg = Math.max(1, Math.floor(player.attack * multiplier) + Math.floor(Math.random() * 10) - 5);
+  return rollCrit(player.critChance, baseDmg);
 }
 
 function updateQuestProgress(player: PlayerState, monsterType: string, room: GameRoom, sessionId: string) {
@@ -278,9 +301,36 @@ function checkLevelUp(player: PlayerState, room: GameRoom, sessionId: string) {
 }
 
 // Class configs
-const CLASS_CONFIG: Record<string, { range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number }> = {
-  warrior: { range: 1, attackBase: 30, hpBase: 120, attackInterval: 1000, mpBase: 40 },
-  ranger:  { range: 4, attackBase: 20, hpBase: 80,  attackInterval: 1500, mpBase: 60 },
+const CLASS_CONFIG: Record<string, {
+  range: number; attackBase: number; hpBase: number; attackInterval: number; mpBase: number;
+  defBase: number; critBase: number; dodgeBase: number; mpRegenBase: number;
+  hpPerLevel: number; mpPerLevel: number; atkPerLevel: number; defPerLevel: number;
+  critPerLevel: number; dodgePerLevel: number; mpRegenPerLevel: number;
+}> = {
+  warrior: {
+    range: 1, attackBase: 22, hpBase: 130, attackInterval: 1100, mpBase: 30,
+    defBase: 8, critBase: 3, dodgeBase: 2, mpRegenBase: 2,
+    hpPerLevel: 22, mpPerLevel: 4, atkPerLevel: 4, defPerLevel: 3,
+    critPerLevel: 0.3, dodgePerLevel: 0.1, mpRegenPerLevel: 0.5,
+  },
+  ranger: {
+    range: 4, attackBase: 20, hpBase: 85, attackInterval: 1400, mpBase: 50,
+    defBase: 3, critBase: 8, dodgeBase: 5, mpRegenBase: 4,
+    hpPerLevel: 12, mpPerLevel: 7, atkPerLevel: 4, defPerLevel: 1,
+    critPerLevel: 0.5, dodgePerLevel: 0.3, mpRegenPerLevel: 1,
+  },
+  mage: {
+    range: 3, attackBase: 10, hpBase: 70, attackInterval: 1600, mpBase: 100,
+    defBase: 2, critBase: 5, dodgeBase: 2, mpRegenBase: 8,
+    hpPerLevel: 10, mpPerLevel: 14, atkPerLevel: 2, defPerLevel: 1,
+    critPerLevel: 0.3, dodgePerLevel: 0.1, mpRegenPerLevel: 2,
+  },
+  rogue: {
+    range: 1, attackBase: 18, hpBase: 80, attackInterval: 900, mpBase: 40,
+    defBase: 4, critBase: 10, dodgeBase: 8, mpRegenBase: 3,
+    hpPerLevel: 13, mpPerLevel: 5, atkPerLevel: 5, defPerLevel: 1,
+    critPerLevel: 0.7, dodgePerLevel: 0.5, mpRegenPerLevel: 0.5,
+  },
 };
 
 const COLORS = [
@@ -536,12 +586,9 @@ export class GameRoom extends Room<GameState> {
   checkLevelUp(player: PlayerState, sessionId: string) {
     const newLevel = levelFromXp(player.xp);
     if (newLevel > player.level) {
-      const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
       player.level = newLevel;
-      player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
+      recalcEquipBonuses(player);
       player.hp = player.maxHp;
-      player.attack = cfg.attackBase + (newLevel - 1) * 5;
-      player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
       player.mp = player.maxMp;
       this.broadcast("levelup", { sessionId, name: player.name, level: newLevel });
     }
@@ -744,13 +791,13 @@ export class GameRoom extends Room<GameState> {
         // Out of range — keep target, just don't attack yet
         return;
       }
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       slime.hp = Math.max(0, slime.hp - damage);
       slime.targetPlayerId = client.sessionId; // aggro on attacker
       this.trackDamage(player.targetId, client.sessionId, damage);
 
       // For ranger, send projectile
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", {
           fromX: px + TILE_SIZE / 2, fromY: py,
           toX: slime.x + TILE_SIZE / 2, toY: slime.y,
@@ -758,7 +805,7 @@ export class GameRoom extends Room<GameState> {
         });
       }
 
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       if (slime.hp <= 0) {
         slime.alive = false;
@@ -804,11 +851,11 @@ export class GameRoom extends Room<GameState> {
       if (d > cfg.range) {
         return;
       }
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       wolf.hp = Math.max(0, wolf.hp - damage);
       this.trackDamage(player.targetId, client.sessionId, damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", {
           fromX: px + TILE_SIZE / 2, fromY: py,
           toX: wolf.x + TILE_SIZE / 2, toY: wolf.y,
@@ -816,7 +863,7 @@ export class GameRoom extends Room<GameState> {
         });
       }
 
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       if (wolf.hp <= 0) {
         wolf.alive = false;
@@ -853,10 +900,21 @@ export class GameRoom extends Room<GameState> {
       if (d > cfg.range) {
         return;
       }
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
-      target.hp = Math.max(0, target.hp - damage);
+      // Dodge check for target
+      if (target.dodgeChance > 0 && Math.random() * 100 < target.dodgeChance) {
+        if (player.playerClass === "ranger" || player.playerClass === "mage") {
+          this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: target.x + TILE_SIZE / 2, toY: target.y, attackerId: client.sessionId });
+        }
+        this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage: 0, dodged: true });
+        return;
+      }
+      const { damage, isCrit } = calcPlayerDamage(player);
+      // Apply defense
+      const defResult = applyDefense(damage, target.defense, target);
+      const finalDmg = defResult.damage;
+      target.hp = Math.max(0, target.hp - finalDmg);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", {
           fromX: px + TILE_SIZE / 2, fromY: py,
           toX: target.x + TILE_SIZE / 2, toY: target.y,
@@ -866,7 +924,7 @@ export class GameRoom extends Room<GameState> {
 
       this.broadcast("pvp_hit", {
         targetId: player.targetId, attackerId: client.sessionId,
-        attackerName: player.name, damage,
+        attackerName: player.name, damage: finalDmg, isCrit,
       });
 
       if (target.hp <= 0) {
@@ -875,16 +933,7 @@ export class GameRoom extends Room<GameState> {
         player.gold += randRange(PVP_GOLD_MIN, PVP_GOLD_MAX);
         player.targetId = "";
 
-        const newLevel = levelFromXp(player.xp);
-        if (newLevel > player.level) {
-          player.level = newLevel;
-          player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
-          player.hp = player.maxHp;
-          player.attack = cfg.attackBase + (newLevel - 1) * 5;
-          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
-          player.mp = player.maxMp;
-          this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
-        }
+        this.checkLevelUp(player, client.sessionId);
 
         this.broadcast("pvp_kill", {
           killerId: client.sessionId, killerName: player.name,
@@ -900,14 +949,14 @@ export class GameRoom extends Room<GameState> {
     if (goblin && goblin.alive) {
       const d = dist(px, py, goblin.x, goblin.y);
       if (d > cfg.range) return;
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       goblin.hp = Math.max(0, goblin.hp - damage);
       this.trackDamage(player.targetId, client.sessionId, damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblin.x + TILE_SIZE / 2, toY: goblin.y, attackerId: client.sessionId });
       }
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       if (goblin.hp <= 0) {
         goblin.alive = false;
@@ -926,14 +975,14 @@ export class GameRoom extends Room<GameState> {
     if (skeleton && skeleton.alive) {
       const d = dist(px, py, skeleton.x, skeleton.y);
       if (d > cfg.range) return;
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       skeleton.hp = Math.max(0, skeleton.hp - damage);
       this.trackDamage(player.targetId, client.sessionId, damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skeleton.x + TILE_SIZE / 2, toY: skeleton.y, attackerId: client.sessionId });
       }
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       if (skeleton.hp <= 0) {
         skeleton.alive = false;
@@ -952,14 +1001,14 @@ export class GameRoom extends Room<GameState> {
     if (boss && boss.alive) {
       const d = dist(px, py, boss.x, boss.y);
       if (d > cfg.range) return;
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       boss.hp = Math.max(0, boss.hp - damage);
       this.trackDamage(player.targetId, client.sessionId, damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: boss.x + TILE_SIZE / 2, toY: boss.y, attackerId: client.sessionId });
       }
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       // Phase change at 40% HP
       if (boss.hp > 0 && boss.hp <= boss.maxHp * BOSS_PHASE2_HP_RATIO && boss.phase === 1) {
@@ -1000,10 +1049,10 @@ export class GameRoom extends Room<GameState> {
     if (worldEvt && worldEvt.active && worldEvt.eventType === "golden_slime" && worldEvt.hp > 0) {
       const d = dist(px, py, worldEvt.x, worldEvt.y);
       if (d > cfg.range) return;
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       worldEvt.hp = Math.max(0, worldEvt.hp - damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", {
           fromX: px + TILE_SIZE / 2, fromY: py,
           toX: worldEvt.x + TILE_SIZE / 2, toY: worldEvt.y,
@@ -1012,7 +1061,7 @@ export class GameRoom extends Room<GameState> {
         });
       }
 
-      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
 
       if (worldEvt.hp <= 0) {
         worldEvt.active = false;
@@ -1223,7 +1272,11 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= WOLF_ATTACK_INTERVAL_MS) {
             wolfLastAttack.set(wolf.id, now);
             const rawDmg = WOLF_ATK + Math.floor(Math.random() * 8);
-            const damage = applyDefense(rawDmg, closest.defense, closest);
+            const defResult = applyDefense(rawDmg, closest.defense, closest);
+            if (defResult.dodged) {
+              this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: wolf.id, dodged: true });
+            } else {
+            const damage = defResult.damage;
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", {
               targetId: closestSid,
@@ -1232,6 +1285,7 @@ export class GameRoom extends Room<GameState> {
               y: closest.y,
               attackerId: wolf.id,
             });
+            }
             if (closest.hp <= 0) {
               wolf.targetPlayerId = "";
               this.broadcast("kill", { targetId: closestSid, killerId: wolf.id, killerName: "Wolf", xp: 0 });
@@ -1282,7 +1336,11 @@ export class GameRoom extends Room<GameState> {
             if (now - last >= SLIME_ATTACK_INTERVAL_MS) {
               slimeLastAttack.set(slimeId, now);
               const rawDmg = SLIME_ATK + Math.floor(Math.random() * 6);
-              const damage = applyDefense(rawDmg, target.defense, target);
+              const defResult = applyDefense(rawDmg, target.defense, target);
+              if (defResult.dodged) {
+                this.broadcast("hit", { targetId: slime.targetPlayerId, damage: 0, x: target.x + TILE_SIZE / 2, y: target.y, attackerId: slimeId, dodged: true });
+              } else {
+              const damage = defResult.damage;
               target.hp = Math.max(0, target.hp - damage);
               this.broadcast("hit", {
                 targetId: slime.targetPlayerId,
@@ -1291,6 +1349,7 @@ export class GameRoom extends Room<GameState> {
                 y: target.y,
                 attackerId: slimeId,
               });
+              }
               if (target.hp <= 0) {
                 slime.targetPlayerId = "";
                 this.broadcast("kill", { targetId: slime.targetPlayerId, killerId: slimeId, killerName: "Slime", xp: 0 });
@@ -1428,11 +1487,16 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= GOBLIN_ATTACK_INTERVAL_MS) {
             goblinLastAttack.set(goblin.id, now);
             const rawDmg = GOBLIN_ATK + Math.floor(Math.random() * 8);
-            const damage = applyDefense(rawDmg, closest.defense, closest);
+            const defResult = applyDefense(rawDmg, closest.defense, closest);
+            if (defResult.dodged) {
+              this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id, dodged: true });
+            } else {
+            const damage = defResult.damage;
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id });
-            // Goblins apply poison
-            if (Math.random() < POISON_CHANCE) {
+            }
+            // Goblins apply poison (only if not dodged)
+            if (!defResult.dodged && Math.random() < POISON_CHANCE) {
               applyStatusEffect(closest, "poison", POISON_DURATION_MS);
               this.broadcast("status_applied", { sessionId: closestSid, effect: "poison" });
             }
@@ -1503,11 +1567,16 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= SKELETON_ATTACK_INTERVAL_MS) {
             skeletonLastAttack.set(skeleton.id, now);
             const rawDmg = SKELETON_ATK + Math.floor(Math.random() * 12);
-            const damage = applyDefense(rawDmg, closest.defense, closest);
+            const defResult = applyDefense(rawDmg, closest.defense, closest);
+            if (defResult.dodged) {
+              this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id, dodged: true });
+            } else {
+            const damage = defResult.damage;
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id });
-            // Skeletons apply burn
-            if (Math.random() < BURN_CHANCE) {
+            }
+            // Skeletons apply burn (only if not dodged)
+            if (!defResult.dodged && Math.random() < BURN_CHANCE) {
               applyStatusEffect(closest, "burn", BURN_DURATION_MS);
               this.broadcast("status_applied", { sessionId: closestSid, effect: "burn" });
             }
@@ -1612,7 +1681,12 @@ export class GameRoom extends Room<GameState> {
                 const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - btx), Math.abs(Math.round(p.y / TILE_SIZE) - bty));
                 if (d > BOSS_AOE_RANGE) return;
                 const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
-                const damage = applyDefense(rawDmg, p.defense, p);
+                const defResult = applyDefense(rawDmg, p.defense, p);
+                if (defResult.dodged) {
+                  this.broadcast("hit", { targetId: sid, damage: 0, x: p.x + TILE_SIZE / 2, y: p.y, attackerId: boss.id, dodged: true });
+                  return;
+                }
+                const damage = defResult.damage;
                 p.hp = Math.max(0, p.hp - damage);
                 this.broadcast("hit", { targetId: sid, damage, x: p.x + TILE_SIZE / 2, y: p.y, attackerId: boss.id });
                 // Boss always applies burn
@@ -1628,7 +1702,11 @@ export class GameRoom extends Room<GameState> {
             } else {
               // Single target attack
               const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
-              const damage = applyDefense(rawDmg, closest.defense, closest);
+              const defResult = applyDefense(rawDmg, closest.defense, closest);
+              if (defResult.dodged) {
+                this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: boss.id, dodged: true });
+              } else {
+              const damage = defResult.damage;
               closest.hp = Math.max(0, closest.hp - damage);
               this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: boss.id });
               if (Math.random() < BOSS_BURN_CHANCE) {
@@ -1638,6 +1716,7 @@ export class GameRoom extends Room<GameState> {
               if (closest.hp <= 0) {
                 boss.targetPlayerId = "";
                 this.broadcast("kill", { targetId: closestSid, killerId: boss.id, killerName: "Dragon", xp: 0 });
+              }
               }
             }
           }
@@ -1795,7 +1874,9 @@ export class GameRoom extends Room<GameState> {
         const regenMult = onTemple ? 10 : 1; // 10x regen in temple
 
         if (player.mp < player.maxMp) {
-          player.mp = Math.min(player.maxMp, player.mp + MANA_REGEN_AMT * regenMult);
+          // Class-based MP regen: mpRegen is per 5s, tick is every 2s, so per-tick = mpRegen / 2.5
+          const mpRegenPerTick = player.mpRegen / 2.5;
+          player.mp = Math.min(player.maxMp, player.mp + mpRegenPerTick * regenMult);
         }
         if (onTemple && player.hp < player.maxHp) {
           player.hp = Math.min(player.maxHp, player.hp + 5 * regenMult); // 50 HP/tick in temple
@@ -2322,10 +2403,10 @@ export class GameRoom extends Room<GameState> {
       const d = dist(player.x, player.y, evt.x, evt.y);
       if (d > cfg.range) return;
 
-      const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
+      const { damage, isCrit } = calcPlayerDamage(player);
       evt.hp = Math.max(0, evt.hp - damage);
 
-      if (player.playerClass === "ranger") {
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
         this.broadcast("projectile", {
           fromX: player.x + TILE_SIZE / 2, fromY: player.y,
           toX: evt.x + TILE_SIZE / 2, toY: evt.y,
@@ -2334,7 +2415,7 @@ export class GameRoom extends Room<GameState> {
         });
       }
 
-      this.broadcast("hit", { targetId: data.eventId, damage, attackerId: client.sessionId });
+      this.broadcast("hit", { targetId: data.eventId, damage, attackerId: client.sessionId, isCrit });
 
       if (evt.hp <= 0) {
         evt.active = false;
@@ -2464,7 +2545,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("power_shot", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "ranger") return;
+      if (player.playerClass !== "ranger" && player.playerClass !== "mage") return;
       if (player.mp < POWER_SHOT_COST) return;
       if (!player.targetId) return;
 
@@ -2477,11 +2558,11 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, slime.x, slime.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
-        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         slime.hp = Math.max(0, slime.hp - damage);
         slime.targetPlayerId = client.sessionId;
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: slime.x + TILE_SIZE / 2, toY: slime.y });
-        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (slime.hp <= 0) {
           slime.alive = false; slime.targetPlayerId = "";
           player.targetId = "";
@@ -2489,8 +2570,7 @@ export class GameRoom extends Room<GameState> {
           this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
           const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
           player.xp += xpGain;
-          const newLevel = levelFromXp(player.xp);
-          if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+          this.checkLevelUp(player, client.sessionId);
           this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
           this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
         }
@@ -2503,16 +2583,15 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, wolf.x, wolf.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
-        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         wolf.hp = Math.max(0, wolf.hp - damage);
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: wolf.x + TILE_SIZE / 2, toY: wolf.y });
-        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (wolf.hp <= 0) {
           wolf.alive = false; wolf.targetPlayerId = ""; player.targetId = "";
           player.xp += WOLF_XP;
           this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
-          const newLevel = levelFromXp(player.xp);
-          if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+          this.checkLevelUp(player, client.sessionId);
           this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
@@ -2525,11 +2604,11 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, goblinT.x, goblinT.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
-        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         goblinT.hp = Math.max(0, goblinT.hp - damage);
         goblinT.targetPlayerId = client.sessionId;
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblinT.x + TILE_SIZE / 2, toY: goblinT.y });
-        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (goblinT.hp <= 0) {
           goblinT.alive = false; goblinT.targetPlayerId = ""; player.targetId = "";
           player.xp += GOBLIN_XP;
@@ -2547,11 +2626,11 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, skelT.x, skelT.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
-        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         skelT.hp = Math.max(0, skelT.hp - damage);
         skelT.targetPlayerId = client.sessionId;
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skelT.x + TILE_SIZE / 2, toY: skelT.y });
-        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (skelT.hp <= 0) {
           skelT.alive = false; skelT.targetPlayerId = ""; player.targetId = "";
           player.xp += SKELETON_XP;
@@ -2570,10 +2649,10 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, target.x, target.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
-        const damage = Math.max(1, Math.floor(player.attack * 1.5) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         target.hp = Math.max(0, target.hp - damage);
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: target.x + TILE_SIZE / 2, toY: target.y });
-        this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage });
+        this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage, isCrit });
         if (target.hp <= 0) { player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
       }
     });
@@ -2582,7 +2661,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("cleave", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "warrior") return;
+      if (player.playerClass !== "warrior" && player.playerClass !== "rogue") return;
       if (player.mp < CLEAVE_COST) return;
       player.mp -= CLEAVE_COST;
 
@@ -2595,10 +2674,10 @@ export class GameRoom extends Room<GameState> {
         if (!slime.alive) return;
         const d = dist(px, py, slime.x, slime.y);
         if (d > 1) return;
-        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.2);
         slime.hp = Math.max(0, slime.hp - damage);
         slime.targetPlayerId = client.sessionId;
-        this.broadcast("hit", { targetId: slimeId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: slimeId, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
         if (slime.hp <= 0) {
           slime.alive = false; slime.targetPlayerId = "";
@@ -2617,9 +2696,9 @@ export class GameRoom extends Room<GameState> {
         if (!wolf.alive) return;
         const d = dist(px, py, wolf.x, wolf.y);
         if (d > 1) return;
-        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.2);
         wolf.hp = Math.max(0, wolf.hp - damage);
-        this.broadcast("hit", { targetId: wolfId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: wolfId, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
         if (wolf.hp <= 0) {
           wolf.alive = false; wolf.targetPlayerId = "";
@@ -2636,10 +2715,10 @@ export class GameRoom extends Room<GameState> {
         if (!goblin.alive) return;
         const d = dist(px, py, goblin.x, goblin.y);
         if (d > 1) return;
-        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.2);
         goblin.hp = Math.max(0, goblin.hp - damage);
         goblin.targetPlayerId = client.sessionId;
-        this.broadcast("hit", { targetId: goblinId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: goblinId, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
         if (goblin.hp <= 0) {
           goblin.alive = false; goblin.targetPlayerId = "";
@@ -2656,10 +2735,10 @@ export class GameRoom extends Room<GameState> {
         if (!skeleton.alive) return;
         const d = dist(px, py, skeleton.x, skeleton.y);
         if (d > 1) return;
-        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.2);
         skeleton.hp = Math.max(0, skeleton.hp - damage);
         skeleton.targetPlayerId = client.sessionId;
-        this.broadcast("hit", { targetId: skeletonId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: skeletonId, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
         if (skeleton.hp <= 0) {
           skeleton.alive = false; skeleton.targetPlayerId = "";
@@ -2677,16 +2756,15 @@ export class GameRoom extends Room<GameState> {
         if (isProtectionZone(target.x, target.y)) return;
         const d = dist(px, py, target.x, target.y);
         if (d > 1) return;
-        const damage = Math.max(1, Math.floor(player.attack * 1.2) + Math.floor(Math.random() * 10) - 5);
+        const { damage, isCrit } = calcPlayerDamage(player, 1.2);
         target.hp = Math.max(0, target.hp - damage);
-        this.broadcast("pvp_hit", { targetId: sid, attackerName: player.name, damage });
+        this.broadcast("pvp_hit", { targetId: sid, attackerName: player.name, damage, isCrit });
         hitCount++;
         if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
       });
 
       // Check for level up
-      const newLevel = levelFromXp(player.xp);
-      if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+      this.checkLevelUp(player, client.sessionId);
 
       // Broadcast cleave visual
       this.broadcast("cleave_effect", { sessionId: client.sessionId, x: px, y: py, hits: hitCount });
@@ -2696,7 +2774,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("shield_wall", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "warrior") return;
+      if (player.playerClass !== "warrior" && player.playerClass !== "rogue") return;
       if (player.mp < SHIELD_WALL_COST) return;
       const now = Date.now();
       if (getAbilityCooldown(client.sessionId, "shield_wall") > now) return;
@@ -2714,7 +2792,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("war_cry", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "warrior") return;
+      if (player.playerClass !== "warrior" && player.playerClass !== "rogue") return;
       if (player.mp < WAR_CRY_COST) return;
       const now = Date.now();
       if (getAbilityCooldown(client.sessionId, "war_cry") > now) return;
@@ -2757,7 +2835,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("frost_arrow", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "ranger") return;
+      if (player.playerClass !== "ranger" && player.playerClass !== "mage") return;
       if (player.mp < FROST_ARROW_COST) return;
       if (!player.targetId) return;
       const now = Date.now();
@@ -2775,13 +2853,15 @@ export class GameRoom extends Room<GameState> {
         player.mp -= FROST_ARROW_COST;
         setAbilityCooldown(client.sessionId, "frost_arrow", now + FROST_ARROW_COOLDOWN_MS);
         
-        const damage = Math.max(1, Math.floor(player.attack * FROST_ARROW_DAMAGE_MULT) + Math.floor(Math.random() * 8) - 4);
+        const frostResult = calcPlayerDamage(player, FROST_ARROW_DAMAGE_MULT);
+        const damage = frostResult.damage;
+        const isCrit = frostResult.isCrit;
         monster.hp = Math.max(0, monster.hp - damage);
         monster.frostedUntil = now + FROST_ARROW_DURATION_MS;
         
         // Projectile visual
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: monster.x + TILE_SIZE / 2, toY: monster.y, attackerId: client.sessionId, type: "frost" });
-        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId, isCrit });
         this.broadcast("frost_applied", { targetId: mId, duration: FROST_ARROW_DURATION_MS });
         
         return true;
@@ -2885,7 +2965,7 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("rain_of_arrows", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp <= 0) return;
-      if (player.playerClass !== "ranger") return;
+      if (player.playerClass !== "ranger" && player.playerClass !== "mage") return;
       if (player.mp < RAIN_OF_ARROWS_COST) return;
       if (!player.targetId) return;
       const now = Date.now();
@@ -2929,9 +3009,11 @@ export class GameRoom extends Room<GameState> {
         const d = Math.max(Math.abs(mx - centerTX), Math.abs(my - centerTY));
         if (d > RAIN_OF_ARROWS_RANGE) return;
 
-        const damage = Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4);
+        const rainRoll = rollCrit(player.critChance, Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4));
+        const damage = rainRoll.damage;
+        const isCrit = rainRoll.isCrit;
         monster.hp = Math.max(0, monster.hp - damage);
-        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
 
         if (monster.hp <= 0) {
@@ -2979,9 +3061,11 @@ export class GameRoom extends Room<GameState> {
         const by = Math.round(boss.y / TILE_SIZE);
         const d = Math.max(Math.abs(bx - centerTX), Math.abs(by - centerTY));
         if (d > RAIN_OF_ARROWS_RANGE) return;
-        const damage = Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4);
+        const bossRainRoll = rollCrit(player.critChance, Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4));
+        const damage = bossRainRoll.damage;
+        const isCrit = bossRainRoll.isCrit;
         boss.hp = Math.max(0, boss.hp - damage);
-        this.broadcast("hit", { targetId: id, damage, attackerId: client.sessionId });
+        this.broadcast("hit", { targetId: id, damage, attackerId: client.sessionId, isCrit });
         hitCount++;
         if (boss.hp > 0 && boss.hp <= boss.maxHp * BOSS_PHASE2_HP_RATIO && boss.phase === 1) {
           boss.phase = 2;
@@ -3023,7 +3107,8 @@ export class GameRoom extends Room<GameState> {
 
   onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean; savedGold?: number; savedInventory?: Array<{itemId: string; quantity: number}>; savedEquipment?: Record<string, string> }) {
     const player = new PlayerState();
-    const cls = (options.playerClass === "ranger") ? "ranger" : "warrior";
+    const validClasses = ["warrior", "ranger", "mage", "rogue"];
+    const cls = validClasses.includes(options.playerClass || "") ? options.playerClass! : "warrior";
     const cfg = CLASS_CONFIG[cls];
     player.isHardcore = !!options.isHardcore;
 

@@ -442,7 +442,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         npcDialogueRef.current = { ...data, time: performance.now() };
       });
 
-      room.onMessage("hit", (data: { targetId: string; damage: number; x?: number; y?: number }) => {
+      room.onMessage("hit", (data: { targetId: string; damage: number; x?: number; y?: number; isCrit?: boolean; dodged?: boolean }) => {
+        // Crit color/prefix for player attacks on mobs
+        const critColor = data.isCrit ? "#ffd700" : undefined;
+        const critPrefix = data.isCrit ? "CRIT! -" : undefined;
         const slime = slimesRef.current.get(data.targetId);
         if (slime) {
           slime.hitTime = performance.now();
@@ -451,7 +454,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: slime.displayY,
             damage: data.damage,
             time: performance.now(),
-            color: slime.color,
+            color: critColor || slime.color,
+            prefix: critPrefix,
           });
           for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: slime.displayX + TILE_SIZE / 2, y: slime.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2, life: 15 + Math.random() * 10, maxLife: 25, color: slime.color, size: 2 }); }
         }
@@ -463,7 +467,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             y: wolf.displayY,
             damage: data.damage,
             time: performance.now(),
-            color: "#ff6b6b",
+            color: critColor || "#ff6b6b",
+            prefix: critPrefix,
           });
           for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: wolf.displayX + TILE_SIZE / 2, y: wolf.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#cc3333", size: 2.5 }); }
         }
@@ -471,7 +476,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const goblin = goblinsRef.current.get(data.targetId);
         if (goblin) {
           goblin.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now(), color: "#7dcea0" });
+          damageNumbersRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, damage: data.damage, time: performance.now(), color: critColor || "#7dcea0", prefix: critPrefix });
           // Hit particles
           for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: goblin.displayX + TILE_SIZE / 2, y: goblin.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: "#4a8c3f", size: 2 }); }
         }
@@ -479,7 +484,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const skel = skeletonsRef.current.get(data.targetId);
         if (skel) {
           skel.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: "#bdc3c7" });
+          damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: critColor || "#bdc3c7", prefix: critPrefix });
           // Bone fragment particles
           for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2.5, life: 15 + Math.random() * 10, maxLife: 25, color: "#ecf0f1", size: 1.5 }); }
         }
@@ -487,23 +492,36 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const bossHit = bossesRef.current.get(data.targetId);
         if (bossHit) {
           bossHit.hitTime = performance.now();
-          damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: "#ff8800" });
+          damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: critColor || "#ff8800", prefix: critPrefix });
           for (let i = 0; i < 8; i++) { particlesRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, vx: (Math.random() - 0.5) * 5, vy: -Math.random() * 3, life: 25 + Math.random() * 15, maxLife: 40, color: Math.random() > 0.5 ? "#ff4400" : "#ffcc00", size: 3 }); }
         }
-        // Player hit (by wolf or other mob)
+        // Player hit (by wolf or other mob) — dodge or damage
         const player = playersRef.current.get(data.targetId);
         if (player) {
-          damageNumbersRef.current.push({
-            x: player.displayX + TILE_SIZE / 2,
-            y: player.displayY,
-            damage: data.damage,
-            time: performance.now(),
-          });
+          if (data.dodged) {
+            damageNumbersRef.current.push({
+              x: player.displayX + TILE_SIZE / 2,
+              y: player.displayY,
+              damage: 0,
+              time: performance.now(),
+              color: "#00e5ff",
+              prefix: "DODGE",
+            });
+          } else {
+            damageNumbersRef.current.push({
+              x: player.displayX + TILE_SIZE / 2,
+              y: player.displayY,
+              damage: data.damage,
+              time: performance.now(),
+            });
+          }
         }
         // Sound: hit on a monster = sfxHit, hit on local player = sfxPlayerHit
         if (data.targetId === sessionIdRef.current) {
-          sfxPlayerHit();
-          cameraShakeRef.current = { intensity: Math.min(data.damage * 0.15, 8), time: performance.now() };
+          if (!data.dodged) {
+            sfxPlayerHit();
+            cameraShakeRef.current = { intensity: Math.min(data.damage * 0.15, 8), time: performance.now() };
+          }
         }
         else if (slime || wolf || goblin || skel) sfxHit();
       });
@@ -545,19 +563,34 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
       });
 
-      room.onMessage("pvp_hit", (data: { targetId: string; attackerName: string; damage: number }) => {
+      room.onMessage("pvp_hit", (data: { targetId: string; attackerName: string; damage: number; isCrit?: boolean; dodged?: boolean }) => {
         const target = playersRef.current.get(data.targetId);
         if (target) {
-          damageNumbersRef.current.push({
-            x: target.displayX + TILE_SIZE / 2,
-            y: target.displayY,
-            damage: data.damage,
-            time: performance.now(),
-          });
+          if (data.dodged) {
+            damageNumbersRef.current.push({
+              x: target.displayX + TILE_SIZE / 2,
+              y: target.displayY,
+              damage: 0,
+              time: performance.now(),
+              color: "#00e5ff",
+              prefix: "DODGE",
+            });
+          } else {
+            damageNumbersRef.current.push({
+              x: target.displayX + TILE_SIZE / 2,
+              y: target.displayY,
+              damage: data.damage,
+              time: performance.now(),
+              color: data.isCrit ? "#ffd700" : undefined,
+              prefix: data.isCrit ? "CRIT! -" : undefined,
+            });
+          }
         }
         if (data.targetId === sessionIdRef.current) {
-          sfxPlayerHit();
-          cameraShakeRef.current = { intensity: Math.min(data.damage * 0.2, 10), time: performance.now() };
+          if (!data.dodged) {
+            sfxPlayerHit();
+            cameraShakeRef.current = { intensity: Math.min(data.damage * 0.2, 10), time: performance.now() };
+          }
         } else sfxHit();
       });
 
@@ -1473,21 +1506,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (e.key === "1") { roomRef.current?.send("heal"); return; }
       if (e.key === "2") {
         const me = playersRef.current.get(sessionIdRef.current);
-        if (me?.playerClass === "ranger") roomRef.current?.send("power_shot");
+        if (me?.playerClass === "ranger" || me?.playerClass === "mage") roomRef.current?.send("power_shot");
         else roomRef.current?.send("cleave");
         return;
       }
       if (e.key === "3") {
         // Slot 3: Frost Arrow (ranger) / Shield Wall (warrior)
         const me = playersRef.current.get(sessionIdRef.current);
-        if (me?.playerClass === "ranger") roomRef.current?.send("frost_arrow");
+        if (me?.playerClass === "ranger" || me?.playerClass === "mage") roomRef.current?.send("frost_arrow");
         else roomRef.current?.send("shield_wall");
         return;
       }
       if (e.key === "4") {
         // Slot 4: Rain of Arrows (ranger) / War Cry (warrior)
         const me = playersRef.current.get(sessionIdRef.current);
-        if (me?.playerClass === "ranger") roomRef.current?.send("rain_of_arrows");
+        if (me?.playerClass === "ranger" || me?.playerClass === "mage") roomRef.current?.send("rain_of_arrows");
         else roomRef.current?.send("war_cry");
         return;
       }
@@ -2631,10 +2664,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         // Bounce: starts fast, slows down
         const bounce = progress < 0.15 ? -Math.sin(progress / 0.15 * Math.PI) * 8 : 0;
         const floatY = dmg.y - camY - progress * 45 + bounce;
-        // Scale for big hits
-        const isBigHit = dmg.damage >= 30;
-        const sizeBoost = isBigHit ? Math.max(1, 1.5 - progress) : 1;
-        const fontSize = Math.round((isBigHit ? 22 : 16) * sizeBoost);
+        // Scale for big hits and crits
+        const isCritHit = dmg.prefix?.startsWith("CRIT");
+        const isBigHit = dmg.damage >= 30 || isCritHit;
+        const sizeBoost = isCritHit ? Math.max(1, 1.8 - progress) : (isBigHit ? Math.max(1, 1.5 - progress) : 1);
+        const fontSize = Math.round((isCritHit ? 26 : isBigHit ? 22 : 16) * sizeBoost);
         ctx.save();
         ctx.globalAlpha = alpha;
         ctx.font = `bold ${fontSize}px 'Segoe UI', sans-serif`;
@@ -3050,6 +3084,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         const barBY = h - SLOT_SIZE - 12;
 
         const isRanger = me.playerClass === "ranger";
+        const isMelee = me.playerClass === "warrior" || me.playerClass === "rogue";
         const ATTACK_SPELL_COST = 30;
         const cdNow = Date.now();
         const getCooldownPct = (ability: string): number => {
@@ -3066,20 +3101,34 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           return !!endTime && cdNow < endTime;
         };
 
+        // Mage and Rogue use warrior/ranger abilities for now
+        const usesRangerAbilities = isRanger || me.playerClass === "mage";
+        const usesWarriorAbilities = isMelee;
+        const abilityIcon2 = usesRangerAbilities ? "🏹" : "⚔️";
+        const abilityName2 = usesRangerAbilities ? "P.Shot" : "Cleave";
+        const abilityIcon3 = usesRangerAbilities ? "❄️" : "🛡️";
+        const abilityName3 = usesRangerAbilities ? "Frost" : "Shield";
+        const abilityCost3 = usesRangerAbilities ? 25 : 40;
+        const abilityCd3 = usesRangerAbilities ? "frost_arrow" : "shield_wall";
+        const abilityIcon4 = usesRangerAbilities ? "🌧️" : "📢";
+        const abilityName4 = usesRangerAbilities ? "Rain" : "WarCry";
+        const abilityCost4 = usesRangerAbilities ? 45 : 35;
+        const abilityCd4 = usesRangerAbilities ? "rain_of_arrows" : "war_cry";
+
         const spells = [
           { key: "1", icon: "💚", name: "Heal", cost: HEAL_COST, active: true, canUse: me.mp >= HEAL_COST && me.hp < me.maxHp, cooldownPct: 0 },
-          { key: "2", icon: isRanger ? "🏹" : "⚔️", name: isRanger ? "P.Shot" : "Cleave", cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (isRanger ? !!me.targetId : true), cooldownPct: 0 },
-          { key: "3", icon: isRanger ? "❄️" : "🛡️", name: isRanger ? "Frost" : "Shield",
-            cost: isRanger ? 25 : 40, active: true,
-            canUse: me.mp >= (isRanger ? 25 : 40) && !isOnCooldown(isRanger ? "frost_arrow" : "shield_wall") && (isRanger ? !!me.targetId : true),
-            cooldownPct: getCooldownPct(isRanger ? "frost_arrow" : "shield_wall"),
-            cdAbility: isRanger ? "frost_arrow" : "shield_wall",
+          { key: "2", icon: abilityIcon2, name: abilityName2, cost: ATTACK_SPELL_COST, active: true, canUse: me.mp >= ATTACK_SPELL_COST && (usesRangerAbilities ? !!me.targetId : true), cooldownPct: 0 },
+          { key: "3", icon: abilityIcon3, name: abilityName3,
+            cost: abilityCost3, active: true,
+            canUse: me.mp >= abilityCost3 && !isOnCooldown(abilityCd3) && (usesRangerAbilities ? !!me.targetId : true),
+            cooldownPct: getCooldownPct(abilityCd3),
+            cdAbility: abilityCd3,
           },
-          { key: "4", icon: isRanger ? "🌧️" : "📢", name: isRanger ? "Rain" : "WarCry",
-            cost: isRanger ? 45 : 35, active: true,
-            canUse: me.mp >= (isRanger ? 45 : 35) && !isOnCooldown(isRanger ? "rain_of_arrows" : "war_cry") && (isRanger ? !!me.targetId : true),
-            cooldownPct: getCooldownPct(isRanger ? "rain_of_arrows" : "war_cry"),
-            cdAbility: isRanger ? "rain_of_arrows" : "war_cry",
+          { key: "4", icon: abilityIcon4, name: abilityName4,
+            cost: abilityCost4, active: true,
+            canUse: me.mp >= abilityCost4 && !isOnCooldown(abilityCd4) && (usesRangerAbilities ? !!me.targetId : true),
+            cooldownPct: getCooldownPct(abilityCd4),
+            cdAbility: abilityCd4,
           },
           { key: "5", icon: "❤️", spriteId: "health_potion", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
           { key: "6", icon: "💙", spriteId: "mana_potion", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
@@ -3500,7 +3549,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           {/* Spell bar (bottom center) */}
           <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 4, zIndex: 10 }}>
             <div style={{ ...btnStyle, background: "rgba(46,204,113,0.5)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); roomRef.current?.send("heal"); }}>💚</div>
-            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const m = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(m?.playerClass === "ranger" ? "power_shot" : "cleave"); }}>⚡</div>
+            <div style={{ ...btnStyle, background: "rgba(243,156,18,0.5)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const m = playersRef.current.get(sessionIdRef.current); roomRef.current?.send(m?.playerClass === "ranger" || m?.playerClass === "mage" ? "power_shot" : "cleave"); }}>⚡</div>
             <div style={{ ...btnStyle, background: "rgba(231,76,60,0.4)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "health_potion" }); lastPotionUse.current = now; } }}>❤️</div>
             <div style={{ ...btnStyle, background: "rgba(52,152,219,0.4)", fontSize: 14, width: 48, height: 48, display: "flex", alignItems: "center", justifyContent: "center" }} onTouchStart={(e) => { e.preventDefault(); const now = Date.now(); if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) { roomRef.current?.send("use_potion", { itemId: "mana_potion" }); lastPotionUse.current = now; } }}>💙</div>
           </div>
@@ -3736,13 +3785,24 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             totalMaxMp += it.equipBonus.maxMp || 0;
           }
         });
-        // Base stats by class
+        // Base stats by class (mirror server CLASS_CONFIG)
+        const CLIENT_CLASS_CFG: Record<string, { range: number; atkBase: number; hpBase: number; mpBase: number; defBase: number; critBase: number; dodgeBase: number; mpRegenBase: number; attackInterval: number; hpPerLevel: number; mpPerLevel: number; atkPerLevel: number; defPerLevel: number; critPerLevel: number; dodgePerLevel: number; mpRegenPerLevel: number; icon: string; label: string }> = {
+          warrior: { range: 1, atkBase: 22, hpBase: 130, mpBase: 30, defBase: 8, critBase: 3, dodgeBase: 2, mpRegenBase: 2, attackInterval: 1100, hpPerLevel: 22, mpPerLevel: 4, atkPerLevel: 4, defPerLevel: 3, critPerLevel: 0.3, dodgePerLevel: 0.1, mpRegenPerLevel: 0.5, icon: "⚔️", label: "Warrior" },
+          ranger: { range: 4, atkBase: 20, hpBase: 85, mpBase: 50, defBase: 3, critBase: 8, dodgeBase: 5, mpRegenBase: 4, attackInterval: 1400, hpPerLevel: 12, mpPerLevel: 7, atkPerLevel: 4, defPerLevel: 1, critPerLevel: 0.5, dodgePerLevel: 0.3, mpRegenPerLevel: 1, icon: "🏹", label: "Ranger" },
+          mage: { range: 3, atkBase: 10, hpBase: 70, mpBase: 100, defBase: 2, critBase: 5, dodgeBase: 2, mpRegenBase: 8, attackInterval: 1600, hpPerLevel: 10, mpPerLevel: 14, atkPerLevel: 2, defPerLevel: 1, critPerLevel: 0.3, dodgePerLevel: 0.1, mpRegenPerLevel: 2, icon: "🔮", label: "Mage" },
+          rogue: { range: 1, atkBase: 18, hpBase: 80, mpBase: 40, defBase: 4, critBase: 10, dodgeBase: 8, mpRegenBase: 3, attackInterval: 900, hpPerLevel: 13, mpPerLevel: 5, atkPerLevel: 5, defPerLevel: 1, critPerLevel: 0.7, dodgePerLevel: 0.5, mpRegenPerLevel: 0.5, icon: "🗡️", label: "Rogue" },
+        };
+        const ccfg = CLIENT_CLASS_CFG[me.playerClass] || CLIENT_CLASS_CFG.warrior;
         const isRanger = me.playerClass === "ranger";
-        const baseAtk = isRanger ? 8 : 12;
-        const baseDef = 0;
-        const baseRange = isRanger ? 5 : 1;
-        const baseMaxHp = 100 + (me.level - 1) * 20;
-        const baseMaxMp = 50 + (me.level - 1) * 10;
+        const baseAtk = ccfg.atkBase + (me.level - 1) * ccfg.atkPerLevel;
+        const baseDef = ccfg.defBase + (me.level - 1) * ccfg.defPerLevel;
+        const baseRange = ccfg.range;
+        const baseMaxHp = ccfg.hpBase + (me.level - 1) * ccfg.hpPerLevel;
+        const baseMaxMp = ccfg.mpBase + (me.level - 1) * ccfg.mpPerLevel;
+        const baseCrit = ccfg.critBase + (me.level - 1) * ccfg.critPerLevel;
+        const baseDodge = ccfg.dodgeBase + (me.level - 1) * ccfg.dodgePerLevel;
+        const baseMpRegen = ccfg.mpRegenBase + (me.level - 1) * ccfg.mpRegenPerLevel;
+        const baseAtkSpeed = ccfg.attackInterval;
         const equipSlotLabels: Array<{ slot: string; label: string; icon: string; itemId: string }> = [
           { slot: "weapon", label: "Weapon", icon: "⚔️", itemId: me.equipWeapon },
           { slot: "helmet", label: "Head", icon: "🪖", itemId: me.equipHelmet },
@@ -3770,7 +3830,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               {/* Name/Class/Level */}
               <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
                 <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{me.name} {me.isHardcore && "💀"}</div>
-                <div style={{ color: "#aaa", fontSize: 12 }}>Level {me.level} {isRanger ? "🏹 Ranger" : "⚔️ Warrior"}</div>
+                <div style={{ color: "#aaa", fontSize: 12 }}>Level {me.level} {ccfg.icon} {ccfg.label}</div>
                 {/* XP bar */}
                 <div style={{ marginTop: 8 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#888", marginBottom: 2 }}>
@@ -3798,21 +3858,43 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
               </div>
 
               {/* Combat stats */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
-                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
-                  <div style={{ color: "#e74c3c", fontSize: 10 }}>⚔️ Attack</div>
-                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseAtk + totalAtk}</div>
-                  <div style={{ color: "#888", fontSize: 9 }}>{baseAtk} + {totalAtk}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#e74c3c", fontSize: 9 }}>⚔️ Attack</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseAtk + totalAtk}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>{baseAtk} + {totalAtk}</div>
                 </div>
-                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
-                  <div style={{ color: "#3498db", fontSize: 10 }}>🛡️ Defense</div>
-                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseDef + totalDef}</div>
-                  <div style={{ color: "#888", fontSize: 9 }}>{baseDef} + {totalDef}</div>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#3498db", fontSize: 9 }}>🛡️ Defense</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseDef + totalDef}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>{baseDef} + {totalDef}</div>
                 </div>
-                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "8px 10px", textAlign: "center" }}>
-                  <div style={{ color: "#f39c12", fontSize: 10 }}>🎯 Range</div>
-                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>{baseRange}</div>
-                  <div style={{ color: "#888", fontSize: 9 }}>{isRanger ? "Ranged" : "Melee"}</div>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#f39c12", fontSize: 9 }}>🎯 Range</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseRange}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>{baseRange > 1 ? "Ranged" : "Melee"}</div>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#e67e22", fontSize: 9 }}>⚡ Atk Spd</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{(baseAtkSpeed / 1000).toFixed(1)}s</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>{baseAtkSpeed}ms</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 12 }}>
+                <div style={{ background: "rgba(255,215,0,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#ffd700", fontSize: 9 }}>💥 Crit %</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseCrit.toFixed(1)}%</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>1.5x dmg</div>
+                </div>
+                <div style={{ background: "rgba(0,229,255,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#00e5ff", fontSize: 9 }}>💨 Dodge %</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseDodge.toFixed(1)}%</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>Evade hits</div>
+                </div>
+                <div style={{ background: "rgba(46,204,113,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#2ecc71", fontSize: 9 }}>🔄 MP Regen</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{baseMpRegen.toFixed(1)}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>per 5 sec</div>
                 </div>
               </div>
 
