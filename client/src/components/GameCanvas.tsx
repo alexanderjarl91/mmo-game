@@ -266,17 +266,49 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             ctx.fillStyle = "rgba(194,164,110,0.7)"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             ctx.fillStyle = "rgba(160,130,80,0.3)"; ctx.fillRect(px, py, TILE_SIZE, 2); ctx.fillRect(px, py, 2, TILE_SIZE);
             break;
-          case TILE.WATER:
-            ctx.fillStyle = "rgba(30,100,200,0.75)"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-            ctx.strokeStyle = "rgba(100,180,255,0.4)"; ctx.lineWidth = 1;
-            for (let r = 0; r < 3; r++) { const ry = py + 15 + r * 16; ctx.beginPath(); ctx.moveTo(px + 8, ry); ctx.quadraticCurveTo(px + 32, ry - 5 + (r % 2) * 10, px + 56, ry); ctx.stroke(); }
+          case TILE.WATER: {
+            // Animated water with shifting colors
+            const waterPhase = (time / 2000 + (tx * 0.3 + ty * 0.2)) % 1;
+            const waterR = 20 + Math.sin(waterPhase * Math.PI * 2) * 10;
+            const waterG = 80 + Math.sin(waterPhase * Math.PI * 2 + 1) * 20;
+            const waterB = 180 + Math.sin(waterPhase * Math.PI * 2 + 2) * 20;
+            ctx.fillStyle = `rgba(${waterR},${waterG},${waterB},0.8)`;
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            // Animated wave ripples
+            ctx.strokeStyle = `rgba(150,210,255,${0.3 + Math.sin(time / 800 + tx) * 0.15})`;
+            ctx.lineWidth = 1;
+            for (let r = 0; r < 3; r++) {
+              const waveOffset = Math.sin(time / 600 + tx * 2 + r) * 4;
+              const ry = py + 12 + r * 18;
+              ctx.beginPath();
+              ctx.moveTo(px + 4, ry + waveOffset);
+              ctx.quadraticCurveTo(px + 32, ry - 6 + waveOffset + Math.sin(time / 500 + r) * 3, px + 60, ry + waveOffset);
+              ctx.stroke();
+            }
+            // Sparkle on water
+            if (Math.sin(time / 300 + tx * 7 + ty * 11) > 0.92) {
+              ctx.fillStyle = "rgba(255,255,255,0.6)";
+              ctx.beginPath();
+              ctx.arc(px + 20 + Math.sin(tx * 3) * 15, py + 20 + Math.cos(ty * 5) * 15, 1.5, 0, Math.PI * 2);
+              ctx.fill();
+            }
             break;
-          case TILE.TREE:
-            ctx.fillStyle = "#5D4037"; ctx.fillRect(px + 24, py + 32, 16, 28);
-            ctx.fillStyle = "rgba(0,80,0,0.9)"; ctx.beginPath(); ctx.arc(px + 32, py + 24, 22, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "rgba(50,160,50,0.8)"; ctx.beginPath(); ctx.arc(px + 30, py + 20, 18, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "rgba(100,200,80,0.5)"; ctx.beginPath(); ctx.arc(px + 26, py + 16, 8, 0, Math.PI * 2); ctx.fill();
+          }
+          case TILE.TREE: {
+            // Swaying tree
+            const sway = Math.sin(time / 1200 + tx * 2.7 + ty * 1.3) * 2;
+            // Trunk
+            ctx.fillStyle = "#5D4037";
+            ctx.fillRect(px + 24, py + 32, 16, 28);
+            // Foliage (swaying)
+            ctx.fillStyle = "rgba(0,80,0,0.9)";
+            ctx.beginPath(); ctx.arc(px + 32 + sway, py + 24, 22, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = "rgba(50,160,50,0.8)";
+            ctx.beginPath(); ctx.arc(px + 30 + sway * 1.2, py + 20, 18, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = "rgba(100,200,80,0.5)";
+            ctx.beginPath(); ctx.arc(px + 26 + sway * 1.5, py + 16, 8, 0, Math.PI * 2); ctx.fill();
             break;
+          }
           case TILE.ROCK:
             ctx.fillStyle = "#757575"; ctx.beginPath(); ctx.ellipse(px + 32, py + 38, 24, 18, 0, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = "#9E9E9E"; ctx.beginPath(); ctx.ellipse(px + 28, py + 34, 18, 14, -0.2, 0, Math.PI * 2); ctx.fill();
@@ -409,6 +441,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           damageNumbersRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, damage: data.damage, time: performance.now(), color: "#bdc3c7" });
           // Bone fragment particles
           for (let i = 0; i < 4; i++) { particlesRef.current.push({ x: skel.displayX + TILE_SIZE / 2, y: skel.displayY, vx: (Math.random() - 0.5) * 3, vy: -Math.random() * 2.5, life: 15 + Math.random() * 10, maxLife: 25, color: "#ecf0f1", size: 1.5 }); }
+        }
+        // Boss hit
+        const bossHit = bossesRef.current.get(data.targetId);
+        if (bossHit) {
+          bossHit.hitTime = performance.now();
+          damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: "#ff8800" });
+          for (let i = 0; i < 8; i++) { particlesRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, vx: (Math.random() - 0.5) * 5, vy: -Math.random() * 3, life: 25 + Math.random() * 15, maxLife: 40, color: Math.random() > 0.5 ? "#ff4400" : "#ffcc00", size: 3 }); }
         }
         // Player hit (by wolf or other mob)
         const player = playersRef.current.get(data.targetId);
@@ -2241,6 +2280,16 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           if (!sk.alive) return;
           ctx.fillStyle = "#e0e0e0";
           ctx.fillRect(mmX + (sk.displayX / TILE_SIZE) * pxPerTileX - 1, mmY + (sk.displayY / TILE_SIZE) * pxPerTileY - 1, 3, 3);
+        });
+
+        // Boss dots (large, pulsing red)
+        bossesRef.current.forEach((b) => {
+          if (!b.alive) return;
+          const btx = b.displayX / TILE_SIZE;
+          const bty = b.displayY / TILE_SIZE;
+          const bossSize = 3 + Math.sin(time / 200) * 1;
+          ctx.fillStyle = "#ff0000";
+          ctx.beginPath(); ctx.arc(mmX + btx * pxPerTileX, mmY + bty * pxPerTileY, bossSize, 0, Math.PI * 2); ctx.fill();
         });
 
         // Other players (blue dots)
