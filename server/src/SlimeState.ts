@@ -10,4 +10,5 @@ export class SlimeState extends Schema {
   @type("string") size: string = "normal"; // small, normal, big
   @type("boolean") alive: boolean = true;
   @type("string") targetPlayerId: string = ""; // aggro target (empty = neutral)
+  @type("number") frostedUntil: number = 0;
 }

@@ -47,6 +47,42 @@ const HEAL_AMOUNT = 30;     // hp restored
 const POWER_SHOT_COST = 30; // ranger extra shot
 const CLEAVE_COST = 30;     // warrior AoE attack
 const POTION_COOLDOWN_MS = 2000;
+// Ability cooldowns & costs
+const SHIELD_WALL_COST = 40;
+const SHIELD_WALL_DURATION_MS = 6000;
+const SHIELD_WALL_COOLDOWN_MS = 20000;
+const SHIELD_WALL_REDUCTION = 0.5; // 50% damage reduction
+
+const WAR_CRY_COST = 35;
+const WAR_CRY_DURATION_MS = 10000;
+const WAR_CRY_COOLDOWN_MS = 25000;
+const WAR_CRY_ATK_BONUS = 0.5; // +50% attack
+const WAR_CRY_RANGE = 3; // tiles — allies within this range also get buffed
+
+const FROST_ARROW_COST = 25;
+const FROST_ARROW_DURATION_MS = 4000;
+const FROST_ARROW_COOLDOWN_MS = 12000;
+const FROST_ARROW_DAMAGE_MULT = 0.8; // 80% of normal attack
+
+const RAIN_OF_ARROWS_COST = 45;
+const RAIN_OF_ARROWS_COOLDOWN_MS = 18000;
+const RAIN_OF_ARROWS_RANGE = 3; // tiles AOE radius
+const RAIN_OF_ARROWS_DAMAGE_MULT = 0.6; // 60% of normal attack per hit
+
+// Ability cooldown tracking (per session, per ability)
+const abilityCooldowns = new Map<string, Map<string, number>>();
+
+function getAbilityCooldown(sessionId: string, ability: string): number {
+  const map = abilityCooldowns.get(sessionId);
+  if (!map) return 0;
+  return map.get(ability) || 0;
+}
+
+function setAbilityCooldown(sessionId: string, ability: string, until: number) {
+  if (!abilityCooldowns.has(sessionId)) abilityCooldowns.set(sessionId, new Map());
+  abilityCooldowns.get(sessionId)!.set(ability, until);
+}
+
 // Status effect config
 const POISON_DURATION_MS = 8000; // 8 seconds
 const POISON_TICK_MS = 2000;     // tick every 2s
@@ -144,7 +180,7 @@ function recalcEquipBonuses(player: PlayerState) {
     bonusMaxHp += item.equipBonus.maxHp || 0;
     bonusMaxMp += item.equipBonus.maxMp || 0;
   }
-  player.attack = cfg.attackBase + (level - 1) * 5 + bonusAtk;
+  player.attack = cfg.attackBase + (level - 1) * 5 + bonusAtk + player.buffWarCryAtk;
   player.defense = bonusDef;
   const newMaxHp = cfg.hpBase + (level - 1) * 20 + bonusMaxHp;
   const newMaxMp = cfg.mpBase + (level - 1) * 10 + bonusMaxMp;
@@ -190,9 +226,14 @@ function applyStatusEffect(player: PlayerState, effect: "poison" | "burn", durat
   player.statusEffectEnd = Date.now() + durationMs;
 }
 
-function applyDefense(rawDamage: number, defense: number): number {
+function applyDefense(rawDamage: number, defense: number, player?: PlayerState): number {
   // Defense reduces damage: dmg * 100 / (100 + defense)
-  return Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
+  let dmg = Math.max(1, Math.floor(rawDamage * 100 / (100 + defense)));
+  // Shield Wall reduction
+  if (player && player.buffShieldWallEnd > Date.now()) {
+    dmg = Math.max(1, Math.floor(dmg * (1 - SHIELD_WALL_REDUCTION)));
+  }
+  return dmg;
 }
 
 function updateQuestProgress(player: PlayerState, monsterType: string, room: GameRoom, sessionId: string) {
@@ -875,6 +916,8 @@ export class GameRoom extends Room<GameState> {
       const now = Date.now();
       this.state.wolves.forEach((wolf) => {
         if (!wolf.alive) return;
+        // Frost slow: skip 50% of movement ticks when frosted
+        if (wolf.frostedUntil > now && Math.random() < 0.5) return;
         const wtx = Math.round(wolf.x / TILE_SIZE);
         const wty = Math.round(wolf.y / TILE_SIZE);
 
@@ -931,7 +974,7 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= WOLF_ATTACK_INTERVAL_MS) {
             wolfLastAttack.set(wolf.id, now);
             const rawDmg = WOLF_ATK + Math.floor(Math.random() * 8);
-            const damage = applyDefense(rawDmg, closest.defense);
+            const damage = applyDefense(rawDmg, closest.defense, closest);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", {
               targetId: closestSid,
@@ -964,6 +1007,9 @@ export class GameRoom extends Room<GameState> {
       const now = Date.now();
       this.state.slimes.forEach((slime, slimeId) => {
         if (!slime.alive) return;
+        // Frost slow: skip 50% of movement ticks when frosted
+        const slimeNow = Date.now();
+        if (slime.frostedUntil > slimeNow && Math.random() < 0.5) return;
         const stx = Math.round(slime.x / TILE_SIZE);
         const sty = Math.round(slime.y / TILE_SIZE);
 
@@ -987,7 +1033,7 @@ export class GameRoom extends Room<GameState> {
             if (now - last >= SLIME_ATTACK_INTERVAL_MS) {
               slimeLastAttack.set(slimeId, now);
               const rawDmg = SLIME_ATK + Math.floor(Math.random() * 6);
-              const damage = applyDefense(rawDmg, target.defense);
+              const damage = applyDefense(rawDmg, target.defense, target);
               target.hp = Math.max(0, target.hp - damage);
               this.broadcast("hit", {
                 targetId: slime.targetPlayerId,
@@ -1088,6 +1134,8 @@ export class GameRoom extends Room<GameState> {
       const now = Date.now();
       this.state.goblins.forEach((goblin) => {
         if (!goblin.alive) return;
+        // Frost slow
+        if (goblin.frostedUntil > now && Math.random() < 0.5) return;
         const gtx = Math.round(goblin.x / TILE_SIZE);
         const gty = Math.round(goblin.y / TILE_SIZE);
 
@@ -1131,7 +1179,7 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= GOBLIN_ATTACK_INTERVAL_MS) {
             goblinLastAttack.set(goblin.id, now);
             const rawDmg = GOBLIN_ATK + Math.floor(Math.random() * 8);
-            const damage = applyDefense(rawDmg, closest.defense);
+            const damage = applyDefense(rawDmg, closest.defense, closest);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id });
             // Goblins apply poison
@@ -1162,6 +1210,8 @@ export class GameRoom extends Room<GameState> {
       const now = Date.now();
       this.state.skeletons.forEach((skeleton) => {
         if (!skeleton.alive) return;
+        // Frost slow
+        if (skeleton.frostedUntil > now && Math.random() < 0.5) return;
         const stx = Math.round(skeleton.x / TILE_SIZE);
         const sty = Math.round(skeleton.y / TILE_SIZE);
 
@@ -1204,7 +1254,7 @@ export class GameRoom extends Room<GameState> {
           if (now - last >= SKELETON_ATTACK_INTERVAL_MS) {
             skeletonLastAttack.set(skeleton.id, now);
             const rawDmg = SKELETON_ATK + Math.floor(Math.random() * 12);
-            const damage = applyDefense(rawDmg, closest.defense);
+            const damage = applyDefense(rawDmg, closest.defense, closest);
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id });
             // Skeletons apply burn
@@ -1256,6 +1306,8 @@ export class GameRoom extends Room<GameState> {
       const now = Date.now();
       this.state.bosses.forEach((boss) => {
         if (!boss.alive) return;
+        // Frost slow (only 25% slowdown on bosses — they resist)
+        if (boss.frostedUntil > now && Math.random() < 0.25) return;
         const btx = Math.round(boss.x / TILE_SIZE);
         const bty = Math.round(boss.y / TILE_SIZE);
 
@@ -1311,7 +1363,7 @@ export class GameRoom extends Room<GameState> {
                 const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - btx), Math.abs(Math.round(p.y / TILE_SIZE) - bty));
                 if (d > BOSS_AOE_RANGE) return;
                 const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
-                const damage = applyDefense(rawDmg, p.defense);
+                const damage = applyDefense(rawDmg, p.defense, p);
                 p.hp = Math.max(0, p.hp - damage);
                 this.broadcast("hit", { targetId: sid, damage, x: p.x + TILE_SIZE / 2, y: p.y, attackerId: boss.id });
                 // Boss always applies burn
@@ -1327,7 +1379,7 @@ export class GameRoom extends Room<GameState> {
             } else {
               // Single target attack
               const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
-              const damage = applyDefense(rawDmg, closest.defense);
+              const damage = applyDefense(rawDmg, closest.defense, closest);
               closest.hp = Math.max(0, closest.hp - damage);
               this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: boss.id });
               if (Math.random() < BOSS_BURN_CHANCE) {
@@ -1372,8 +1424,9 @@ export class GameRoom extends Room<GameState> {
       });
     }, 200); // check every 200ms
 
-    // Mana regen tick (+ temple fast regen)
+    // Mana regen tick (+ temple fast regen + buff expiry)
     this.clock.setInterval(() => {
+      const regenNow = Date.now();
       this.state.players.forEach((player) => {
         if (player.hp <= 0) return;
         // Check if player is on a temple tile
@@ -1387,6 +1440,13 @@ export class GameRoom extends Room<GameState> {
         }
         if (onTemple && player.hp < player.maxHp) {
           player.hp = Math.min(player.maxHp, player.hp + 5 * regenMult); // 50 HP/tick in temple
+        }
+
+        // War Cry buff expiry
+        if (player.buffWarCryEnd > 0 && regenNow >= player.buffWarCryEnd) {
+          player.buffWarCryAtk = 0;
+          player.buffWarCryEnd = 0;
+          recalcEquipBonuses(player);
         }
       });
     }, MANA_REGEN_MS);
@@ -2033,6 +2093,339 @@ export class GameRoom extends Room<GameState> {
       this.broadcast("cleave_effect", { sessionId: client.sessionId, x: px, y: py, hits: hitCount });
     });
 
+    // ── Shield Wall (Warrior) — 50% damage reduction for 6 seconds ──
+    this.onMessage("shield_wall", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "warrior") return;
+      if (player.mp < SHIELD_WALL_COST) return;
+      const now = Date.now();
+      if (getAbilityCooldown(client.sessionId, "shield_wall") > now) return;
+      // Don't recast if already active
+      if (player.buffShieldWallEnd > now) return;
+
+      player.mp -= SHIELD_WALL_COST;
+      player.buffShieldWallEnd = now + SHIELD_WALL_DURATION_MS;
+      setAbilityCooldown(client.sessionId, "shield_wall", now + SHIELD_WALL_COOLDOWN_MS);
+
+      this.broadcast("shield_wall_effect", { sessionId: client.sessionId, duration: SHIELD_WALL_DURATION_MS });
+    });
+
+    // ── War Cry (Warrior) — +50% attack for 10 seconds, buffs nearby allies ──
+    this.onMessage("war_cry", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "warrior") return;
+      if (player.mp < WAR_CRY_COST) return;
+      const now = Date.now();
+      if (getAbilityCooldown(client.sessionId, "war_cry") > now) return;
+
+      player.mp -= WAR_CRY_COST;
+      setAbilityCooldown(client.sessionId, "war_cry", now + WAR_CRY_COOLDOWN_MS);
+
+      // Apply buff to caster
+      const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+      const baseAtk = cfg.attackBase + (player.level - 1) * 5;
+      const bonus = Math.floor(baseAtk * WAR_CRY_ATK_BONUS);
+      player.buffWarCryAtk = bonus;
+      player.buffWarCryEnd = now + WAR_CRY_DURATION_MS;
+      recalcEquipBonuses(player);
+
+      // Buff nearby allies
+      const px = Math.round(player.x / TILE_SIZE);
+      const py = Math.round(player.y / TILE_SIZE);
+      const buffedPlayers = [client.sessionId];
+      this.state.players.forEach((ally, sid) => {
+        if (sid === client.sessionId || ally.hp <= 0) return;
+        const ax = Math.round(ally.x / TILE_SIZE);
+        const ay = Math.round(ally.y / TILE_SIZE);
+        const d = Math.max(Math.abs(ax - px), Math.abs(ay - py));
+        if (d <= WAR_CRY_RANGE) {
+          const allyCfg = CLASS_CONFIG[ally.playerClass] || CLASS_CONFIG.warrior;
+          const allyBaseAtk = allyCfg.attackBase + (ally.level - 1) * 5;
+          const allyBonus = Math.floor(allyBaseAtk * WAR_CRY_ATK_BONUS);
+          ally.buffWarCryAtk = allyBonus;
+          ally.buffWarCryEnd = now + WAR_CRY_DURATION_MS;
+          recalcEquipBonuses(ally);
+          buffedPlayers.push(sid);
+        }
+      });
+
+      this.broadcast("war_cry_effect", { sessionId: client.sessionId, x: player.x, y: player.y, range: WAR_CRY_RANGE, buffed: buffedPlayers, duration: WAR_CRY_DURATION_MS });
+    });
+
+    // ── Frost Arrow (Ranger) — damages and slows target ──
+    this.onMessage("frost_arrow", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "ranger") return;
+      if (player.mp < FROST_ARROW_COST) return;
+      if (!player.targetId) return;
+      const now = Date.now();
+      if (getAbilityCooldown(client.sessionId, "frost_arrow") > now) return;
+
+      const cfg = CLASS_CONFIG.ranger;
+      const px = player.x, py = player.y;
+
+      // Find the target monster and apply frost
+      const applyFrost = (monster: { x: number; y: number; hp: number; alive: boolean; frostedUntil: number }, mId: string, maxHp: number): boolean => {
+        if (!monster.alive) return false;
+        const d = dist(px, py, monster.x, monster.y);
+        if (d > cfg.range) return false;
+        
+        player.mp -= FROST_ARROW_COST;
+        setAbilityCooldown(client.sessionId, "frost_arrow", now + FROST_ARROW_COOLDOWN_MS);
+        
+        const damage = Math.max(1, Math.floor(player.attack * FROST_ARROW_DAMAGE_MULT) + Math.floor(Math.random() * 8) - 4);
+        monster.hp = Math.max(0, monster.hp - damage);
+        monster.frostedUntil = now + FROST_ARROW_DURATION_MS;
+        
+        // Projectile visual
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: monster.x + TILE_SIZE / 2, toY: monster.y, attackerId: client.sessionId, type: "frost" });
+        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId });
+        this.broadcast("frost_applied", { targetId: mId, duration: FROST_ARROW_DURATION_MS });
+        
+        return true;
+      };
+
+      // Try each monster type
+      const slime = this.state.slimes.get(player.targetId);
+      if (slime) { 
+        if (applyFrost(slime as any, player.targetId, slime.maxHp)) {
+          slime.targetPlayerId = client.sessionId;
+          if (slime.hp <= 0) {
+            slime.alive = false; slime.targetPlayerId = "";
+            player.targetId = "";
+            let sIdx = 0;
+            this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
+            const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
+            player.xp += xpGain;
+            player.gold += randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX);
+            checkLevelUp(player, this, client.sessionId);
+            this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+            this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.frostedUntil = 0; slime.alive = true; } }, SLIME_RESPAWN_MS);
+          }
+        }
+        return;
+      }
+
+      const wolf = this.state.wolves.get(player.targetId);
+      if (wolf) {
+        if (applyFrost(wolf as any, player.targetId, wolf.maxHp)) {
+          if (wolf.hp <= 0) {
+            wolf.alive = false; wolf.targetPlayerId = "";
+            const wolfId = player.targetId;
+            player.targetId = "";
+            player.xp += WOLF_XP; player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
+            checkLevelUp(player, this, client.sessionId);
+            this.broadcastKillAndQuest({ targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+            this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.frostedUntil = 0; wolf.alive = true; }, WOLF_RESPAWN_MS);
+          }
+        }
+        return;
+      }
+
+      const goblin = this.state.goblins.get(player.targetId);
+      if (goblin) {
+        if (applyFrost(goblin as any, player.targetId, goblin.maxHp)) {
+          goblin.targetPlayerId = client.sessionId;
+          if (goblin.hp <= 0) {
+            goblin.alive = false; goblin.targetPlayerId = "";
+            const gId = player.targetId;
+            player.targetId = "";
+            player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+            checkLevelUp(player, this, client.sessionId);
+            this.broadcastKillAndQuest({ targetId: gId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+            this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.frostedUntil = 0; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
+          }
+        }
+        return;
+      }
+
+      const skeleton = this.state.skeletons.get(player.targetId);
+      if (skeleton) {
+        if (applyFrost(skeleton as any, player.targetId, skeleton.maxHp)) {
+          skeleton.targetPlayerId = client.sessionId;
+          if (skeleton.hp <= 0) {
+            skeleton.alive = false; skeleton.targetPlayerId = "";
+            const sId = player.targetId;
+            player.targetId = "";
+            player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+            checkLevelUp(player, this, client.sessionId);
+            this.broadcastKillAndQuest({ targetId: sId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+            this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.frostedUntil = 0; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
+          }
+        }
+        return;
+      }
+
+      const boss = this.state.bosses.get(player.targetId);
+      if (boss) {
+        if (applyFrost(boss as any, player.targetId, boss.maxHp)) {
+          if (boss.hp <= 0) {
+            boss.alive = false;
+            const bossId = player.targetId;
+            player.targetId = "";
+            player.xp += BOSS_XP; player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
+            const loot = rollLoot("boss");
+            const lootNames: string[] = [];
+            for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
+            if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+            checkLevelUp(player, this, client.sessionId);
+            this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+            this.broadcastKillAndQuest({ targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+            this.clock.setTimeout(() => { this.broadcast("boss_warning", { bossType: boss.bossType, message: `⚠️ The Dragon stirs in the wilderness...` }); }, BOSS_RESPAWN_MS - BOSS_SPAWN_ANNOUNCE_MS);
+            this.clock.setTimeout(() => { boss.hp = BOSS_HP; boss.maxHp = BOSS_HP; boss.phase = 1; boss.x = boss.spawnX; boss.y = boss.spawnY; boss.targetPlayerId = ""; boss.frostedUntil = 0; boss.alive = true; this.broadcast("boss_spawn", { bossId: boss.id, bossType: boss.bossType }); }, BOSS_RESPAWN_MS);
+          }
+        }
+        return;
+      }
+    });
+
+    // ── Rain of Arrows (Ranger) — AOE damage around target ──
+    this.onMessage("rain_of_arrows", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.playerClass !== "ranger") return;
+      if (player.mp < RAIN_OF_ARROWS_COST) return;
+      if (!player.targetId) return;
+      const now = Date.now();
+      if (getAbilityCooldown(client.sessionId, "rain_of_arrows") > now) return;
+
+      const cfg = CLASS_CONFIG.ranger;
+      const px = player.x, py = player.y;
+
+      // Find the target to get center of AOE
+      let centerX = 0, centerY = 0;
+      let foundTarget = false;
+
+      // Check all monster types for target
+      const checkTarget = (collection: any, id: string) => {
+        const m = collection.get(id);
+        if (m && m.alive) { centerX = m.x; centerY = m.y; foundTarget = true; }
+      };
+      checkTarget(this.state.slimes, player.targetId);
+      if (!foundTarget) checkTarget(this.state.wolves, player.targetId);
+      if (!foundTarget) checkTarget(this.state.goblins, player.targetId);
+      if (!foundTarget) checkTarget(this.state.skeletons, player.targetId);
+      if (!foundTarget) checkTarget(this.state.bosses, player.targetId);
+      if (!foundTarget) return;
+
+      // Range check to target
+      if (dist(px, py, centerX, centerY) > cfg.range) return;
+
+      player.mp -= RAIN_OF_ARROWS_COST;
+      setAbilityCooldown(client.sessionId, "rain_of_arrows", now + RAIN_OF_ARROWS_COOLDOWN_MS);
+
+      const centerTX = Math.round(centerX / TILE_SIZE);
+      const centerTY = Math.round(centerY / TILE_SIZE);
+      let hitCount = 0;
+      const baseDmg = Math.floor(player.attack * RAIN_OF_ARROWS_DAMAGE_MULT);
+
+      // Hit all monsters in AOE range
+      const hitMonster = (monster: any, mId: string, xpGain: number, goldMin: number, goldMax: number, respawnMs: number, lootTable: string, onDeath?: () => void) => {
+        if (!monster.alive) return;
+        const mx = Math.round(monster.x / TILE_SIZE);
+        const my = Math.round(monster.y / TILE_SIZE);
+        const d = Math.max(Math.abs(mx - centerTX), Math.abs(my - centerTY));
+        if (d > RAIN_OF_ARROWS_RANGE) return;
+
+        const damage = Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4);
+        monster.hp = Math.max(0, monster.hp - damage);
+        this.broadcast("hit", { targetId: mId, damage, attackerId: client.sessionId });
+        hitCount++;
+
+        if (monster.hp <= 0) {
+          monster.alive = false;
+          if (monster.targetPlayerId !== undefined) monster.targetPlayerId = "";
+          if (player.targetId === mId) player.targetId = "";
+          player.xp += xpGain;
+          player.gold += randRange(goldMin, goldMax);
+          const loot = rollLoot(lootTable);
+          const lootNames: string[] = [];
+          for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
+          if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+          this.broadcastKillAndQuest({ targetId: mId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          if (onDeath) onDeath();
+        }
+      };
+
+      this.state.slimes.forEach((slime, id) => {
+        let sIdx = 0;
+        const parts = id.split("_"); sIdx = parseInt(parts[1]) || 0;
+        const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
+        hitMonster(slime, id, xpGain, SLIME_GOLD_MIN, SLIME_GOLD_MAX, SLIME_RESPAWN_MS, "slime", () => {
+          this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.alive = true; } }, SLIME_RESPAWN_MS);
+        });
+      });
+
+      this.state.wolves.forEach((wolf, id) => {
+        hitMonster(wolf, id, WOLF_XP, WOLF_GOLD_MIN, WOLF_GOLD_MAX, WOLF_RESPAWN_MS, "wolf", () => {
+          this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
+        });
+      });
+
+      this.state.goblins.forEach((goblin, id) => {
+        hitMonster(goblin, id, GOBLIN_XP, GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX, GOBLIN_RESPAWN_MS, "goblin", () => {
+          this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
+        });
+      });
+
+      this.state.skeletons.forEach((skeleton, id) => {
+        hitMonster(skeleton, id, SKELETON_XP, SKELETON_GOLD_MIN, SKELETON_GOLD_MAX, SKELETON_RESPAWN_MS, "skeleton", () => {
+          this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
+        });
+      });
+
+      // Also hit boss if in range
+      this.state.bosses.forEach((boss, id) => {
+        if (!boss.alive) return;
+        const bx = Math.round(boss.x / TILE_SIZE);
+        const by = Math.round(boss.y / TILE_SIZE);
+        const d = Math.max(Math.abs(bx - centerTX), Math.abs(by - centerTY));
+        if (d > RAIN_OF_ARROWS_RANGE) return;
+        const damage = Math.max(1, baseDmg + Math.floor(Math.random() * 8) - 4);
+        boss.hp = Math.max(0, boss.hp - damage);
+        this.broadcast("hit", { targetId: id, damage, attackerId: client.sessionId });
+        hitCount++;
+        if (boss.hp > 0 && boss.hp <= boss.maxHp * BOSS_PHASE2_HP_RATIO && boss.phase === 1) {
+          boss.phase = 2;
+          this.broadcast("boss_enrage", { bossId: boss.id, bossType: boss.bossType });
+        }
+        if (boss.hp <= 0) {
+          boss.alive = false;
+          if (player.targetId === id) player.targetId = "";
+          player.xp += BOSS_XP; player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
+          const loot = rollLoot("boss");
+          const lootNames: string[] = [];
+          for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
+          if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+          this.broadcast("boss_killed", { bossId: id, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+          this.broadcastKillAndQuest({ targetId: id, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
+          this.clock.setTimeout(() => { this.broadcast("boss_warning", { bossType: boss.bossType, message: `⚠️ The Dragon stirs...` }); }, BOSS_RESPAWN_MS - BOSS_SPAWN_ANNOUNCE_MS);
+          this.clock.setTimeout(() => { boss.hp = BOSS_HP; boss.maxHp = BOSS_HP; boss.phase = 1; boss.x = boss.spawnX; boss.y = boss.spawnY; boss.targetPlayerId = ""; boss.alive = true; this.broadcast("boss_spawn", { bossId: boss.id, bossType: boss.bossType }); }, BOSS_RESPAWN_MS);
+        }
+      });
+
+      checkLevelUp(player, this, client.sessionId);
+
+      this.broadcast("rain_of_arrows_effect", { sessionId: client.sessionId, x: centerX, y: centerY, range: RAIN_OF_ARROWS_RANGE, hits: hitCount });
+    });
+
+    // ── Ability Cooldown Query — client can request current cooldowns ──
+    this.onMessage("query_cooldowns", (client) => {
+      const now = Date.now();
+      const cds: Record<string, number> = {};
+      const map = abilityCooldowns.get(client.sessionId);
+      if (map) {
+        map.forEach((until, ability) => {
+          const remaining = Math.max(0, until - now);
+          if (remaining > 0) cds[ability] = remaining;
+        });
+      }
+      client.send("cooldowns", cds);
+    });
+
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
@@ -2098,6 +2491,7 @@ export class GameRoom extends Room<GameState> {
     lastMoveTime.delete(client.sessionId);
     lastAutoAttackTime.delete(client.sessionId);
     npcDialogueIndex.delete(client.sessionId);
+    abilityCooldowns.delete(client.sessionId);
   }
 
   onDispose() { console.log("GameRoom disposed"); }

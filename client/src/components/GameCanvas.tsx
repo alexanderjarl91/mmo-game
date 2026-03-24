@@ -203,6 +203,12 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const levelUpEffectsRef = useRef<LevelUpEffect[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const cameraShakeRef = useRef<{ intensity: number; time: number }>({ intensity: 0, time: 0 });
+  // Ability cooldown tracking (client-side mirror)
+  const abilityCooldownsRef = useRef<Map<string, number>>(new Map()); // ability -> end timestamp
+  const shieldWallEffectsRef = useRef<Array<{ sessionId: string; time: number; duration: number }>>([]);
+  const warCryEffectsRef = useRef<Array<{ x: number; y: number; time: number; range: number }>>([]);
+  const frostEffectsRef = useRef<Array<{ targetId: string; time: number; duration: number }>>([]);
+  const rainEffectsRef = useRef<Array<{ x: number; y: number; time: number; range: number; hits: number }>>([]);
 
   useEffect(() => { setIsMobile("ontouchstart" in window || navigator.maxTouchPoints > 0); }, []);
 
@@ -249,6 +255,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const buildTileCache = useCallback(() => {
     const map = worldMapRef.current;
     if (!map) return;
+    const time = 0; // Static snapshot for tile cache (no animation)
     const mw = mapSizeRef.current.w, mh = mapSizeRef.current.h;
     const c = document.createElement("canvas");
     c.width = mw * TILE_SIZE; c.height = mh * TILE_SIZE;
@@ -615,6 +622,78 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           }
         }
         sfxCleave();
+      });
+
+      // ── New ability effect handlers ──
+      room.onMessage("shield_wall_effect", (data: { sessionId: string; duration: number }) => {
+        shieldWallEffectsRef.current.push({ sessionId: data.sessionId, time: performance.now(), duration: data.duration });
+        // Set client-side cooldown
+        abilityCooldownsRef.current.set("shield_wall", Date.now() + 20000);
+        // Blue shield particles
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          for (let i = 0; i < 12; i++) {
+            const angle = (Math.PI * 2 * i) / 12;
+            particlesRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY + TILE_SIZE / 2, vx: Math.cos(angle) * 3, vy: Math.sin(angle) * 3, life: 30, maxLife: 30, color: "#3498db", size: 3 });
+          }
+          damageNumbersRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY - 20, damage: 0, time: performance.now(), color: "#3498db", prefix: "🛡️ Shield Wall!" });
+        }
+      });
+
+      room.onMessage("war_cry_effect", (data: { sessionId: string; x: number; y: number; range: number; buffed: string[]; duration: number }) => {
+        warCryEffectsRef.current.push({ x: data.x, y: data.y, time: performance.now(), range: data.range });
+        abilityCooldownsRef.current.set("war_cry", Date.now() + 25000);
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          // Orange/red war cry particles expanding outward
+          for (let i = 0; i < 20; i++) {
+            const angle = (Math.PI * 2 * i) / 20;
+            particlesRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY + TILE_SIZE / 2, vx: Math.cos(angle) * 6, vy: Math.sin(angle) * 6, life: 25, maxLife: 25, color: i % 2 === 0 ? "#e74c3c" : "#f39c12", size: 4 });
+          }
+          damageNumbersRef.current.push({ x: p.displayX + TILE_SIZE / 2, y: p.displayY - 20, damage: 0, time: performance.now(), color: "#e74c3c", prefix: "⚔️ War Cry!" });
+        }
+      });
+
+      room.onMessage("frost_applied", (data: { targetId: string; duration: number }) => {
+        frostEffectsRef.current.push({ targetId: data.targetId, time: performance.now(), duration: data.duration });
+        abilityCooldownsRef.current.set("frost_arrow", Date.now() + 12000);
+        // Blue frost particles on target
+        const getMonsterPos = (id: string) => {
+          const s = slimesRef.current.get(id); if (s) return { x: s.displayX, y: s.displayY };
+          const w = wolvesRef.current.get(id); if (w) return { x: w.displayX, y: w.displayY };
+          const g = goblinsRef.current.get(id); if (g) return { x: g.displayX, y: g.displayY };
+          const sk = skeletonsRef.current.get(id); if (sk) return { x: sk.displayX, y: sk.displayY };
+          const b = bossesRef.current.get(id); if (b) return { x: b.displayX, y: b.displayY };
+          return null;
+        };
+        const pos = getMonsterPos(data.targetId);
+        if (pos) {
+          for (let i = 0; i < 10; i++) {
+            particlesRef.current.push({ x: pos.x + TILE_SIZE / 2, y: pos.y + TILE_SIZE / 2, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20, maxLife: 20, color: i % 3 === 0 ? "#ffffff" : "#74b9ff", size: 2.5 });
+          }
+        }
+      });
+
+      room.onMessage("rain_of_arrows_effect", (data: { sessionId: string; x: number; y: number; range: number; hits: number }) => {
+        rainEffectsRef.current.push({ x: data.x, y: data.y, time: performance.now(), range: data.range, hits: data.hits });
+        abilityCooldownsRef.current.set("rain_of_arrows", Date.now() + 18000);
+        // Arrow rain particles falling from sky
+        for (let i = 0; i < 25; i++) {
+          const rx = data.x + (Math.random() - 0.5) * data.range * 2 * TILE_SIZE;
+          const ry = data.y + (Math.random() - 0.5) * data.range * 2 * TILE_SIZE;
+          particlesRef.current.push({ x: rx, y: ry - 100, vx: (Math.random() - 0.5) * 1, vy: 8 + Math.random() * 4, life: 20, maxLife: 20, color: "#8B4513", size: 2 });
+        }
+        const p = playersRef.current.get(data.sessionId);
+        if (p) {
+          damageNumbersRef.current.push({ x: data.x + TILE_SIZE / 2, y: data.y - 20, damage: data.hits, time: performance.now(), color: "#8B4513", prefix: "🏹 " });
+        }
+      });
+
+      room.onMessage("cooldowns", (data: Record<string, number>) => {
+        const now = Date.now();
+        for (const [ability, remaining] of Object.entries(data)) {
+          abilityCooldownsRef.current.set(ability, now + remaining);
+        }
       });
 
       room.onMessage("status_applied", (data: { sessionId: string; effect: string }) => {
@@ -1159,6 +1238,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         return;
       }
       if (e.key === "3") {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (me?.playerClass === "ranger") roomRef.current?.send("frost_arrow");
+        else roomRef.current?.send("shield_wall");
+        return;
+      }
+      if (e.key === "4") {
+        const me = playersRef.current.get(sessionIdRef.current);
+        if (me?.playerClass === "ranger") roomRef.current?.send("rain_of_arrows");
+        else roomRef.current?.send("war_cry");
+        return;
+      }
+      if (e.key === "5") {
         const now = Date.now();
         if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
           roomRef.current?.send("use_potion", { itemId: "health_potion" });
@@ -1166,7 +1257,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         }
         return;
       }
-      if (e.key === "4") {
+      if (e.key === "6") {
         const now = Date.now();
         if (now - lastPotionUse.current >= POTION_COOLDOWN_MS) {
           roomRef.current?.send("use_potion", { itemId: "mana_potion" });

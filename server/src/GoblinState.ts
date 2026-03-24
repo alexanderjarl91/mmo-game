@@ -9,6 +9,7 @@ export class GoblinState extends Schema {
   @type("boolean") alive: boolean = true;
   @type("string") targetPlayerId: string = "";
   @type("string") variant: string = "normal"; // normal, archer, shaman
+  @type("number") frostedUntil: number = 0;
   spawnX: number = 0;
   spawnY: number = 0;
 }

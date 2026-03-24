@@ -10,6 +10,7 @@ export class BossState extends Schema {
   @type("boolean") alive: boolean = false; // starts dead, spawns periodically
   @type("string") targetPlayerId: string = "";
   @type("number") phase: number = 1; // boss phase (changes behavior at low HP)
+  @type("number") frostedUntil: number = 0;
   spawnX: number = 0;
   spawnY: number = 0;
 }

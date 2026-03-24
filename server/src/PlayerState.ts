@@ -31,6 +31,10 @@ export class PlayerState extends Schema {
   // Status effects (synced to client for visuals)
   @type("string") statusEffect: string = ""; // "poison" | "burn" | "" 
   @type("number") statusEffectEnd: number = 0; // server timestamp when effect expires
+  // Buff system (synced to client for visuals)
+  @type("number") buffShieldWallEnd: number = 0; // timestamp when Shield Wall expires
+  @type("number") buffWarCryEnd: number = 0; // timestamp when War Cry expires
+  @type("number") buffWarCryAtk: number = 0; // bonus attack from War Cry
   // Quest system
   @type([QuestSlot]) quests = new ArraySchema<QuestSlot>();
   completedQuestIds: Set<string> = new Set(); // not synced via schema, tracked server-side
