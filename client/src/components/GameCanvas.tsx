@@ -81,6 +81,20 @@ interface SkeletonData {
   hitTime: number;
 }
 
+interface BossData {
+  displayX: number; displayY: number;
+  fromX: number; fromY: number;
+  toX: number; toY: number;
+  moveStartTime: number;
+  serverX: number; serverY: number;
+  hp: number; maxHp: number;
+  alive: boolean;
+  bossType: string;
+  targetPlayerId: string;
+  phase: number;
+  hitTime: number;
+}
+
 interface ChatBubble { sessionId: string; message: string; time: number; }
 interface EmoteBubble { sessionId: string; emote: string; time: number; }
 interface NPCData { id: string; x: number; y: number; name: string; color: string; direction: string; dialogue: string[]; }
@@ -144,6 +158,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const wolvesRef = useRef<Map<string, WolfData>>(new Map());
   const goblinsRef = useRef<Map<string, GoblinData>>(new Map());
   const skeletonsRef = useRef<Map<string, SkeletonData>>(new Map());
+  const bossesRef = useRef<Map<string, BossData>>(new Map());
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
   const [connected, setConnected] = useState(false);
@@ -488,6 +503,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             prefix: "+",
           });
         }
+        // Healing particle effect — green sparkles rising upward
+        if (p) {
+          const colors = ["#2ecc71", "#27ae60", "#a8e6cf", "#81ecec"];
+          for (let i = 0; i < 12; i++) {
+            particlesRef.current.push({
+              x: p.displayX + TILE_SIZE / 2 + (Math.random() - 0.5) * 30,
+              y: p.displayY + TILE_SIZE / 2 + (Math.random() - 0.5) * 20,
+              vx: (Math.random() - 0.5) * 1,
+              vy: -1 - Math.random() * 2,
+              life: 30 + Math.random() * 20,
+              maxLife: 50,
+              color: colors[Math.floor(Math.random() * colors.length)],
+              size: 2 + Math.random() * 2,
+            });
+          }
+        }
         if (data.sessionId === sessionIdRef.current) sfxHeal();
       });
 
@@ -516,6 +547,22 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             color: "#f39c12",
             prefix: "⚔️ ",
           });
+        }
+        // Cleave arc particles
+        if (p) {
+          for (let i = 0; i < 16; i++) {
+            const angle = (Math.PI * 2 * i) / 16;
+            particlesRef.current.push({
+              x: p.displayX + TILE_SIZE / 2,
+              y: p.displayY + TILE_SIZE / 2,
+              vx: Math.cos(angle) * 5,
+              vy: Math.sin(angle) * 5,
+              life: 15 + Math.random() * 10,
+              maxLife: 25,
+              color: i % 2 === 0 ? "#f39c12" : "#e74c3c",
+              size: 3,
+            });
+          }
         }
         sfxCleave();
       });
@@ -769,6 +816,70 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         });
       });
       room.state.skeletons.onRemove((_: any, id: string) => { skeletonsRef.current.delete(id); });
+
+      // Bosses
+      room.state.bosses.onAdd((boss: any, id: string) => {
+        const data: BossData = {
+          displayX: boss.x, displayY: boss.y,
+          fromX: boss.x, fromY: boss.y,
+          toX: boss.x, toY: boss.y,
+          moveStartTime: 0,
+          serverX: boss.x, serverY: boss.y,
+          hp: boss.hp, maxHp: boss.maxHp,
+          alive: boss.alive,
+          bossType: boss.bossType || "dragon",
+          targetPlayerId: boss.targetPlayerId || "",
+          phase: boss.phase || 1,
+          hitTime: 0,
+        };
+        bossesRef.current.set(id, data);
+        boss.onChange(() => {
+          const b = bossesRef.current.get(id);
+          if (!b) return;
+          const newX = boss.x, newY = boss.y;
+          if (newX !== b.serverX || newY !== b.serverY) {
+            b.fromX = b.displayX; b.fromY = b.displayY;
+            b.toX = newX; b.toY = newY;
+            b.moveStartTime = performance.now();
+          }
+          b.serverX = newX; b.serverY = newY;
+          b.hp = boss.hp; b.maxHp = boss.maxHp;
+          b.alive = boss.alive;
+          b.bossType = boss.bossType || "dragon";
+          b.targetPlayerId = boss.targetPlayerId || "";
+          b.phase = boss.phase || 1;
+        });
+      });
+      room.state.bosses.onRemove((_: any, id: string) => { bossesRef.current.delete(id); });
+
+      // Boss event messages
+      room.onMessage("boss_spawn", (data: { bossId: string; bossType: string }) => {
+        killFeedRef.current.push({ text: `🐉 A ${data.bossType === "dragon" ? "Dragon" : "Boss"} has appeared!`, time: performance.now() });
+      });
+      room.onMessage("boss_enrage", (data: { bossId: string }) => {
+        killFeedRef.current.push({ text: `🔥 The Dragon enters a rage! Its attacks grow fiercer!`, time: performance.now() });
+      });
+      room.onMessage("boss_killed", (data: { killerName: string; bossType: string; xp: number }) => {
+        killFeedRef.current.push({ text: `🏆 ${data.killerName} has slain the ${data.bossType === "dragon" ? "Dragon" : "Boss"}! (+${data.xp} XP)`, time: performance.now() });
+      });
+      room.onMessage("boss_warning", (data: { message: string }) => {
+        killFeedRef.current.push({ text: data.message, time: performance.now() });
+      });
+      room.onMessage("boss_aoe", (data: { bossId: string; x: number; y: number; range: number }) => {
+        // Spawn lots of fire particles for the AOE
+        for (let i = 0; i < 30; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const r = Math.random() * data.range * TILE_SIZE;
+          particlesRef.current.push({
+            x: data.x + TILE_SIZE / 2 + Math.cos(angle) * r,
+            y: data.y + TILE_SIZE / 2 + Math.sin(angle) * r,
+            vx: (Math.random() - 0.5) * 2, vy: -Math.random() * 3 - 1,
+            life: 800, maxLife: 800,
+            color: Math.random() > 0.5 ? "#ff4400" : "#ffcc00",
+            size: 4 + Math.random() * 3,
+          });
+        }
+      });
 
       room.onLeave(() => { if (!cancelled) setConnected(false); });
     }).catch((err) => { if (!cancelled) setError(err.message || "Failed to connect"); });
@@ -1027,6 +1138,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           s.displayX = s.fromX + (s.toX - s.fromX) * t;
           s.displayY = s.fromY + (s.toY - s.fromY) * t;
           if (t >= 1) { s.displayX = s.toX; s.displayY = s.toY; s.fromX = s.toX; s.fromY = s.toY; s.moveStartTime = 0; }
+        }
+      });
+
+      // Update boss positions
+      const BOSS_MOVE_DURATION = 500;
+      bossesRef.current.forEach((b) => {
+        if (b.moveStartTime > 0) {
+          const t = Math.min((now - b.moveStartTime) / BOSS_MOVE_DURATION, 1);
+          b.displayX = b.fromX + (b.toX - b.fromX) * t;
+          b.displayY = b.fromY + (b.toY - b.fromY) * t;
+          if (t >= 1) { b.displayX = b.toX; b.displayY = b.toY; b.fromX = b.toX; b.fromY = b.toY; b.moveStartTime = 0; }
         }
       });
 

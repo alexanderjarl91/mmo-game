@@ -1182,6 +1182,129 @@ export class GameRoom extends Room<GameState> {
       });
     }, SKELETON_MOVE_INTERVAL_MS);
 
+    // ── Boss Dragon Spawn ──
+    // Find a spawn spot in the dangerous outer zone
+    let bossSpawnX = 8, bossSpawnY = 8;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const bx = 4 + Math.floor(Math.random() * 10);
+      const by = 4 + Math.floor(Math.random() * 10);
+      if (canWalk(bx, by)) { bossSpawnX = bx; bossSpawnY = by; break; }
+    }
+    const dragon = new BossState();
+    dragon.id = "boss_dragon";
+    dragon.bossType = "dragon";
+    dragon.x = bossSpawnX * TILE_SIZE;
+    dragon.y = bossSpawnY * TILE_SIZE;
+    dragon.spawnX = dragon.x;
+    dragon.spawnY = dragon.y;
+    dragon.hp = BOSS_HP;
+    dragon.maxHp = BOSS_HP;
+    dragon.alive = true;
+    dragon.phase = 1;
+    this.state.bosses.set(dragon.id, dragon);
+
+    // Boss AI — aggressive, AOE attacks, enrage at low HP
+    const bossLastAttack = new Map<string, number>();
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.bosses.forEach((boss) => {
+        if (!boss.alive) return;
+        const btx = Math.round(boss.x / TILE_SIZE);
+        const bty = Math.round(boss.y / TILE_SIZE);
+
+        let closest: PlayerState | null = null;
+        let closestSid = "";
+        let closestDist = Infinity;
+        this.state.players.forEach((p, sid) => {
+          if (p.hp <= 0) return;
+          const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - btx), Math.abs(Math.round(p.y / TILE_SIZE) - bty));
+          if (d <= BOSS_CHASE_RANGE && d < closestDist) {
+            closest = p; closestSid = sid; closestDist = d;
+          }
+        });
+
+        if (!closest && boss.targetPlayerId) {
+          const tracked = this.state.players.get(boss.targetPlayerId);
+          if (tracked && tracked.hp > 0) {
+            const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - btx), Math.abs(Math.round(tracked.y / TILE_SIZE) - bty));
+            if (d <= BOSS_LEASH_RANGE) { closest = tracked; closestSid = boss.targetPlayerId; closestDist = d; }
+          }
+        }
+
+        if (!closest) {
+          boss.targetPlayerId = "";
+          // Boss wanders slowly
+          if (Math.random() > 0.2) return;
+          const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nx = boss.x + dir.dx * TILE_SIZE, ny = boss.y + dir.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) return;
+          if (ntx >= 28 && ntx <= 44 && nty >= 28 && nty <= 44) return;
+          boss.x = nx; boss.y = ny;
+          return;
+        }
+
+        boss.targetPlayerId = closestSid;
+
+        if (closestDist <= 1) {
+          if (isProtectionZone(closest.x, closest.y)) return;
+          const last = bossLastAttack.get(boss.id) || 0;
+          const atkInterval = boss.phase === 2 ? BOSS_ATTACK_INTERVAL_MS * 0.6 : BOSS_ATTACK_INTERVAL_MS;
+          if (now - last >= atkInterval) {
+            bossLastAttack.set(boss.id, now);
+            const atkMult = boss.phase === 2 ? BOSS_PHASE2_ATK_MULT : 1;
+            
+            // AOE attack chance
+            if (Math.random() < BOSS_AOE_CHANCE) {
+              // Hit ALL players in range
+              this.state.players.forEach((p, sid) => {
+                if (p.hp <= 0) return;
+                if (isProtectionZone(p.x, p.y)) return;
+                const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - btx), Math.abs(Math.round(p.y / TILE_SIZE) - bty));
+                if (d > BOSS_AOE_RANGE) return;
+                const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
+                const damage = applyDefense(rawDmg, p.defense);
+                p.hp = Math.max(0, p.hp - damage);
+                this.broadcast("hit", { targetId: sid, damage, x: p.x + TILE_SIZE / 2, y: p.y, attackerId: boss.id });
+                // Boss always applies burn
+                if (Math.random() < BOSS_BURN_CHANCE) {
+                  applyStatusEffect(p, "burn", BURN_DURATION_MS * 1.5);
+                  this.broadcast("status_applied", { sessionId: sid, effect: "burn" });
+                }
+                if (p.hp <= 0) {
+                  this.broadcast("kill", { targetId: sid, killerId: boss.id, killerName: "Dragon", xp: 0 });
+                }
+              });
+              this.broadcast("boss_aoe", { bossId: boss.id, x: boss.x, y: boss.y, range: BOSS_AOE_RANGE });
+            } else {
+              // Single target attack
+              const rawDmg = Math.floor((BOSS_ATK + Math.floor(Math.random() * 15)) * atkMult);
+              const damage = applyDefense(rawDmg, closest.defense);
+              closest.hp = Math.max(0, closest.hp - damage);
+              this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: boss.id });
+              if (Math.random() < BOSS_BURN_CHANCE) {
+                applyStatusEffect(closest, "burn", BURN_DURATION_MS * 1.5);
+                this.broadcast("status_applied", { sessionId: closestSid, effect: "burn" });
+              }
+              if (closest.hp <= 0) {
+                boss.targetPlayerId = "";
+                this.broadcast("kill", { targetId: closestSid, killerId: boss.id, killerName: "Dragon", xp: 0 });
+              }
+            }
+          }
+          return;
+        }
+
+        // Chase
+        const ptx = Math.round(closest.x / TILE_SIZE), pty = Math.round(closest.y / TILE_SIZE);
+        const step = bfsNextStep(btx, bty, ptx, pty, BOSS_LEASH_RANGE);
+        if (step) {
+          boss.x = step.x * TILE_SIZE; boss.y = step.y * TILE_SIZE;
+        }
+      });
+    }, BOSS_MOVE_INTERVAL_MS);
+
     // Auto-attack tick — runs frequently, each player attacks on their own interval
     this.clock.setInterval(() => {
       const now = Date.now();
