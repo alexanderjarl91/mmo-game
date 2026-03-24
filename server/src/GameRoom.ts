@@ -5,6 +5,7 @@ import { SlimeState } from "./SlimeState";
 import { WolfState } from "./WolfState";
 import { GoblinState } from "./GoblinState";
 import { SkeletonState } from "./SkeletonState";
+import { BossState } from "./BossState";
 import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
 import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
@@ -254,6 +255,24 @@ const SKELETON_SPAWN_COUNT = 4;
 const SKELETON_GOLD_MIN = 30;
 const SKELETON_GOLD_MAX = 60;
 
+// Boss constants
+const BOSS_HP = 2000;
+const BOSS_ATK = 45;
+const BOSS_XP = 500;
+const BOSS_GOLD_MIN = 200;
+const BOSS_GOLD_MAX = 500;
+const BOSS_CHASE_RANGE = 12;
+const BOSS_LEASH_RANGE = 20;
+const BOSS_MOVE_INTERVAL_MS = 700;
+const BOSS_ATTACK_INTERVAL_MS = 2500;
+const BOSS_RESPAWN_MS = 300000; // 5 minutes
+const BOSS_SPAWN_ANNOUNCE_MS = 10000; // announce 10s before spawn
+const BOSS_PHASE2_HP_RATIO = 0.4; // enrages at 40% HP
+const BOSS_PHASE2_ATK_MULT = 1.5;
+const BOSS_AOE_CHANCE = 0.3; // 30% chance for AOE attack
+const BOSS_AOE_RANGE = 2; // 2 tiles AOE radius
+const BOSS_BURN_CHANCE = 0.5; // 50% chance to burn on hit
+
 const SLIME_TYPES = [
   { color: "#2ecc71", size: "small", hp: 30, xp: 15, name: "Green Slime" },
   { color: "#3498db", size: "normal", hp: 50, xp: 25, name: "Blue Slime" },
@@ -303,6 +322,7 @@ export class GameState extends Schema {
   @type({ map: WolfState }) wolves = new MapSchema<WolfState>();
   @type({ map: GoblinState }) goblins = new MapSchema<GoblinState>();
   @type({ map: SkeletonState }) skeletons = new MapSchema<SkeletonState>();
+  @type({ map: BossState }) bosses = new MapSchema<BossState>();
 }
 
 function canWalk(tx: number, ty: number): boolean {

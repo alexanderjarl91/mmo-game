@@ -181,6 +181,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const lootNotifRef = useRef<Array<{ text: string; time: number }>>([]);
   const levelUpEffectsRef = useRef<LevelUpEffect[]>([]);
   const particlesRef = useRef<Particle[]>([]);
+  const cameraShakeRef = useRef<{ intensity: number; time: number }>({ intensity: 0, time: 0 });
 
   useEffect(() => { setIsMobile("ontouchstart" in window || navigator.maxTouchPoints > 0); }, []);
 
@@ -405,7 +406,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           });
         }
         // Sound: hit on a monster = sfxHit, hit on local player = sfxPlayerHit
-        if (data.targetId === sessionIdRef.current) sfxPlayerHit();
+        if (data.targetId === sessionIdRef.current) {
+          sfxPlayerHit();
+          cameraShakeRef.current = { intensity: Math.min(data.damage * 0.15, 8), time: performance.now() };
+        }
         else if (slime || wolf || goblin || skel) sfxHit();
       });
 
@@ -456,8 +460,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
             time: performance.now(),
           });
         }
-        if (data.targetId === sessionIdRef.current) sfxPlayerHit();
-        else sfxHit();
+        if (data.targetId === sessionIdRef.current) {
+          sfxPlayerHit();
+          cameraShakeRef.current = { intensity: Math.min(data.damage * 0.2, 10), time: performance.now() };
+        } else sfxHit();
       });
 
       room.onMessage("pvp_kill", (data: { killerName: string; targetName: string; xp: number }) => {
@@ -1050,8 +1056,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       const WORLD_W = mapSizeRef.current.w * TILE_SIZE;
       const WORLD_H = mapSizeRef.current.h * TILE_SIZE;
       const me = playersRef.current.get(sessionIdRef.current);
-      const camX = me ? me.displayX + TILE_SIZE / 2 - w / 2 : 0;
-      const camY = me ? me.displayY + TILE_SIZE / 2 - h / 2 : 0;
+      // Camera shake
+      let shakeX = 0, shakeY = 0;
+      const shakeAge = now - cameraShakeRef.current.time;
+      if (shakeAge < 300 && cameraShakeRef.current.intensity > 0) {
+        const decay = 1 - shakeAge / 300;
+        const intensity = cameraShakeRef.current.intensity * decay;
+        shakeX = (Math.random() - 0.5) * intensity * 2;
+        shakeY = (Math.random() - 0.5) * intensity * 2;
+      }
+      const camX = (me ? me.displayX + TILE_SIZE / 2 - w / 2 : 0) + shakeX;
+      const camY = (me ? me.displayY + TILE_SIZE / 2 - h / 2 : 0) + shakeY;
 
       // Tilemap
       if (tileCacheRef.current) {
