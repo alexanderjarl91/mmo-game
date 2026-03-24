@@ -2,6 +2,18 @@
 
 ## Features Added
 
+### 16. 🌟 World Events System
+- **Random events** spawn every 2–5 minutes across the wilderness (first event within 30–60s)
+- **💰 Treasure Chest**: Walk/click to open — rewards 100–300 gold + bonus loot drops (60s timer)
+- **🔮 Mana Shrine**: Stand within 2 tiles to regenerate HP/MP (+10 each per second) and cure poison/burn (45s timer)
+- **✨ Golden Slime**: Rare 500 HP creature that **runs away** from players — kill it for 300 XP, 200–500 gold, and guaranteed rare drops (90s before it escapes)
+- **⭐ XP Orb**: First player to reach it absorbs +150 XP (30s timer)
+- All events shown on **minimap** with color-coded pulsing markers (gold/blue/yellow/purple)
+- **Notification banners** at top center announce spawns, claims, and expiry to all players
+- Golden Slime is fully targetable — auto-attacks, ranger projectiles, abilities all work
+- Walk over chests and XP orbs for automatic interaction
+- Events broadcast server-wide: "💰 Alex opened the Treasure Chest!" etc.
+
 ### 15. 🎣 Fishing System
 - Press **F** near water to cast your line
 - Animated fishing progress bar with bobber and water shimmer
