@@ -12,6 +12,7 @@ import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
 import type { EquipSlot } from "./items";
 import { QuestSlot } from "./QuestSlot";
 import { QUESTS, getAvailableQuests, getTurnInQuests } from "./quests";
+import { DroppedItem } from "./DroppedItem";
 
 const TILE_SIZE = 64;
 const MOVE_COOLDOWN_MS = 120;
@@ -250,6 +251,7 @@ function updateQuestProgress(player: PlayerState, monsterType: string, room: Gam
         const client = room.clients.find(c => c.sessionId === sessionId);
         if (client) {
           client.send("quest_complete_ready", { questId: q.questId, questName: def.name, npcId: def.npcId });
+          room.sendQuestMarkers(client, player);
         }
         room.broadcast("quest_progress", { sessionId, questId: q.questId, progress: q.progress, required: q.required, completed: true });
       } else {
@@ -392,7 +394,13 @@ export class GameState extends Schema {
   @type({ map: GoblinState }) goblins = new MapSchema<GoblinState>();
   @type({ map: SkeletonState }) skeletons = new MapSchema<SkeletonState>();
   @type({ map: BossState }) bosses = new MapSchema<BossState>();
+  @type({ map: DroppedItem }) droppedItems = new MapSchema<DroppedItem>();
 }
+
+// Ground loot config
+const DROPPED_ITEM_LIFETIME_MS = 60000; // items despawn after 60 seconds
+const LOOT_PROTECTION_MS = 5000; // only killer can loot for 5 seconds
+let droppedItemCounter = 0;
 
 function canWalk(tx: number, ty: number): boolean {
   if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
@@ -457,6 +465,87 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
 
 export class GameRoom extends Room<GameState> {
   maxClients = 50;
+
+  // Send quest marker updates to a specific client
+  sendQuestMarkers(client: Client, player: PlayerState) {
+    const activeQuestIds = new Set<string>();
+    const activeQuestMap = new Map<string, { progress: number }>();
+    for (let i = 0; i < player.quests.length; i++) {
+      const q = player.quests.at(i);
+      if (q && !q.turnedIn) {
+        activeQuestIds.add(q.questId);
+        activeQuestMap.set(q.questId, { progress: q.progress });
+      }
+    }
+
+    const questNpcs = ["elder", "innkeeper", "blacksmith", "merchant", "fisherman"];
+    const markers: Record<string, string> = {};
+    
+    // First check turn-ins (? markers)
+    for (const npcId of questNpcs) {
+      const turnIn = getTurnInQuests(npcId, activeQuestMap);
+      if (turnIn.length > 0) {
+        markers[npcId] = "turnin";
+      }
+    }
+    
+    // Then check available quests (! markers) — only if no turn-in
+    for (const npcId of questNpcs) {
+      if (markers[npcId]) continue;
+      const available = getAvailableQuests(npcId, player.level, player.completedQuestIds, activeQuestIds);
+      if (available.length > 0) {
+        markers[npcId] = "available";
+      }
+    }
+
+    client.send("npc_quest_markers", markers);
+  }
+
+  // Spawn ground loot at a position
+  spawnGroundLoot(x: number, y: number, lootTable: string, ownerSessionId: string, goldAmount?: number) {
+    // Roll loot from table
+    const drops = rollLoot(lootTable);
+    
+    // Spawn gold as a ground item
+    if (goldAmount && goldAmount > 0) {
+      const id = `drop_${droppedItemCounter++}`;
+      const item = new DroppedItem();
+      item.id = id;
+      item.itemId = "gold";
+      item.quantity = goldAmount;
+      item.x = x;
+      item.y = y;
+      item.droppedAt = Date.now();
+      item.ownerSessionId = ownerSessionId;
+      this.state.droppedItems.set(id, item);
+      
+      // Schedule despawn
+      this.clock.setTimeout(() => {
+        this.state.droppedItems.delete(id);
+      }, DROPPED_ITEM_LIFETIME_MS);
+    }
+    
+    // Spawn each item drop
+    for (const drop of drops) {
+      const id = `drop_${droppedItemCounter++}`;
+      const item = new DroppedItem();
+      item.id = id;
+      item.itemId = drop.itemId;
+      item.quantity = drop.quantity;
+      // Slight offset so items don't stack exactly
+      item.x = x + (Math.random() - 0.5) * TILE_SIZE * 0.5;
+      item.y = y + (Math.random() - 0.5) * TILE_SIZE * 0.5;
+      item.droppedAt = Date.now();
+      item.ownerSessionId = ownerSessionId;
+      this.state.droppedItems.set(id, item);
+      
+      this.clock.setTimeout(() => {
+        this.state.droppedItems.delete(id);
+      }, DROPPED_ITEM_LIFETIME_MS);
+    }
+    
+    return drops;
+  }
 
   // Broadcast a kill event and auto-update quest progress for the killer
   broadcastKillAndQuest(data: { targetId: string; killerId: string; killerName: string; xp: number }) {
@@ -582,7 +671,6 @@ export class GameRoom extends Room<GameState> {
 
         const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
         player.xp += xpGain;
-        player.gold += randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX);
 
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
@@ -595,18 +683,8 @@ export class GameRoom extends Room<GameState> {
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
-        // Roll loot
-        const loot = rollLoot("slime");
-        const lootNames: string[] = [];
-        for (const drop of loot) {
-          if (addToInventory(player, drop.itemId, drop.quantity)) {
-            const it = ITEMS[drop.itemId];
-            lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
-          }
-        }
-        if (lootNames.length > 0) {
-          client.send("loot_received", { items: lootNames });
-        }
+        // Drop loot on ground
+        this.spawnGroundLoot(slime.x, slime.y, "slime", client.sessionId, randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX));
 
         this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
 
@@ -652,7 +730,6 @@ export class GameRoom extends Room<GameState> {
 
         const xpGain = WOLF_XP;
         player.xp += xpGain;
-        player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
 
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) {
@@ -665,18 +742,8 @@ export class GameRoom extends Room<GameState> {
           this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
         }
 
-        // Roll loot
-        const wolfLoot = rollLoot("wolf");
-        const wolfLootNames: string[] = [];
-        for (const drop of wolfLoot) {
-          if (addToInventory(player, drop.itemId, drop.quantity)) {
-            const it = ITEMS[drop.itemId];
-            wolfLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
-          }
-        }
-        if (wolfLootNames.length > 0) {
-          client.send("loot_received", { items: wolfLootNames });
-        }
+        // Drop loot on ground
+        this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
 
         this.broadcastKillAndQuest( { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
 
@@ -762,13 +829,9 @@ export class GameRoom extends Room<GameState> {
         const goblinId = player.targetId;
         player.targetId = "";
         player.xp += GOBLIN_XP;
-        player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
-        const gLoot = rollLoot("goblin");
-        const gLootNames: string[] = [];
-        for (const drop of gLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; gLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
-        if (gLootNames.length > 0) client.send("loot_received", { items: gLootNames });
+        this.spawnGroundLoot(goblin.x, goblin.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
         this.broadcastKillAndQuest( { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
         this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
       }
@@ -793,13 +856,9 @@ export class GameRoom extends Room<GameState> {
         const skeletonId = player.targetId;
         player.targetId = "";
         player.xp += SKELETON_XP;
-        player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
         const newLevel = levelFromXp(player.xp);
         if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
-        const sLoot = rollLoot("skeleton");
-        const sLootNames: string[] = [];
-        for (const drop of sLoot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; sLootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
-        if (sLootNames.length > 0) client.send("loot_received", { items: sLootNames });
+        this.spawnGroundLoot(skeleton.x, skeleton.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
         this.broadcastKillAndQuest( { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
         this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
       }
@@ -830,16 +889,7 @@ export class GameRoom extends Room<GameState> {
         const bossId = player.targetId;
         player.targetId = "";
         player.xp += BOSS_XP;
-        player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
-        const loot = rollLoot("boss");
-        const lootNames: string[] = [];
-        for (const drop of loot) {
-          if (addToInventory(player, drop.itemId, drop.quantity)) {
-            const it = ITEMS[drop.itemId];
-            lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`);
-          }
-        }
-        if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+        this.spawnGroundLoot(boss.x, boss.y, "boss", client.sessionId, randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX));
         checkLevelUp(player, this, client.sessionId);
         this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
         this.broadcastKillAndQuest( { targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
@@ -1688,6 +1738,7 @@ export class GameRoom extends Room<GameState> {
       player.quests.push(slot);
 
       client.send("quest_accepted", { questId: data.questId, questName: questDef.name, icon: questDef.icon });
+      this.sendQuestMarkers(client, player);
     });
 
     // ── Quest Turn In ──
@@ -1743,6 +1794,7 @@ export class GameRoom extends Room<GameState> {
         questName: questDef.name,
         rewards: rewardParts.join(", "),
       });
+      this.sendQuestMarkers(client, player);
 
       this.broadcast("quest_completed_announce", {
         playerName: player.name,
@@ -1762,6 +1814,44 @@ export class GameRoom extends Room<GameState> {
           client.send("quest_abandoned", { questId: data.questId });
           break;
         }
+      }
+    });
+
+    // ── Pickup ground item ──
+    this.onMessage("pickup_item", (client, data: { itemId: string }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const dropped = this.state.droppedItems.get(data.itemId);
+      if (!dropped) return;
+      
+      // Check proximity (must be within 1.5 tiles)
+      const px = Math.round(player.x / TILE_SIZE);
+      const py = Math.round(player.y / TILE_SIZE);
+      const dx = Math.round(dropped.x / TILE_SIZE);
+      const dy = Math.round(dropped.y / TILE_SIZE);
+      if (Math.abs(px - dx) > 1 || Math.abs(py - dy) > 1) return;
+      
+      // Check loot protection
+      const now = Date.now();
+      if (dropped.ownerSessionId && dropped.ownerSessionId !== client.sessionId && 
+          now - dropped.droppedAt < LOOT_PROTECTION_MS) return;
+      
+      // Handle gold specially
+      if (dropped.itemId === "gold") {
+        player.gold += dropped.quantity;
+        this.state.droppedItems.delete(data.itemId);
+        client.send("loot_received", { items: [`🪙 ${dropped.quantity} gold`] });
+        return;
+      }
+      
+      // Try to add to inventory
+      if (addToInventory(player, dropped.itemId, dropped.quantity)) {
+        const it = ITEMS[dropped.itemId];
+        const name = `${it?.icon || ""} ${it?.name || dropped.itemId}${dropped.quantity > 1 ? ` x${dropped.quantity}` : ""}`;
+        client.send("loot_received", { items: [name] });
+        this.state.droppedItems.delete(data.itemId);
+      } else {
+        client.send("quest_error", { message: "Inventory full!" });
       }
     });
 
@@ -1913,7 +2003,7 @@ export class GameRoom extends Room<GameState> {
         if (wolf.hp <= 0) {
           wolf.alive = false; wolf.targetPlayerId = ""; player.targetId = "";
           player.xp += WOLF_XP;
-          player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
+          this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
           const newLevel = levelFromXp(player.xp);
           if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
           this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
@@ -1935,8 +2025,8 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
         if (goblinT.hp <= 0) {
           goblinT.alive = false; goblinT.targetPlayerId = ""; player.targetId = "";
-          player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
-          const loot = rollLoot("goblin"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
+          player.xp += GOBLIN_XP;
+          this.spawnGroundLoot(goblinT.x, goblinT.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
           checkLevelUp(player, this, client.sessionId);
           this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
           this.clock.setTimeout(() => { goblinT.x = goblinT.spawnX; goblinT.y = goblinT.spawnY; goblinT.hp = GOBLIN_HP; goblinT.maxHp = GOBLIN_HP; goblinT.targetPlayerId = ""; goblinT.alive = true; }, GOBLIN_RESPAWN_MS);
@@ -1957,8 +2047,8 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId });
         if (skelT.hp <= 0) {
           skelT.alive = false; skelT.targetPlayerId = ""; player.targetId = "";
-          player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
-          const loot = rollLoot("skeleton"); for (const drop of loot) addToInventory(player, drop.itemId, drop.quantity);
+          player.xp += SKELETON_XP;
+          this.spawnGroundLoot(skelT.x, skelT.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
           checkLevelUp(player, this, client.sessionId);
           this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
           this.clock.setTimeout(() => { skelT.x = skelT.spawnX; skelT.y = skelT.spawnY; skelT.hp = SKELETON_HP; skelT.maxHp = SKELETON_HP; skelT.targetPlayerId = ""; skelT.alive = true; }, SKELETON_RESPAWN_MS);
@@ -2028,7 +2118,7 @@ export class GameRoom extends Room<GameState> {
           wolf.alive = false; wolf.targetPlayerId = "";
           if (player.targetId === wolfId) player.targetId = "";
           player.xp += WOLF_XP;
-          player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
+          this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
           this.broadcastKillAndQuest( { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
@@ -2047,7 +2137,8 @@ export class GameRoom extends Room<GameState> {
         if (goblin.hp <= 0) {
           goblin.alive = false; goblin.targetPlayerId = "";
           if (player.targetId === goblinId) player.targetId = "";
-          player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+          player.xp += GOBLIN_XP;
+          this.spawnGroundLoot(goblin.x, goblin.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
           this.broadcastKillAndQuest( { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
           this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
         }
@@ -2066,7 +2157,8 @@ export class GameRoom extends Room<GameState> {
         if (skeleton.hp <= 0) {
           skeleton.alive = false; skeleton.targetPlayerId = "";
           if (player.targetId === skeletonId) player.targetId = "";
-          player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+          player.xp += SKELETON_XP;
+          this.spawnGroundLoot(skeleton.x, skeleton.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
           this.broadcastKillAndQuest( { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
           this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
         }
@@ -2200,7 +2292,7 @@ export class GameRoom extends Room<GameState> {
             this.state.slimes.forEach((s, id) => { if (s === slime) { const idx = parseInt(id.split("_")[1]); if (!isNaN(idx)) sIdx = idx; } });
             const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
             player.xp += xpGain;
-            player.gold += randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX);
+            this.spawnGroundLoot(slime.x, slime.y, "slime", client.sessionId, randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX));
             checkLevelUp(player, this, client.sessionId);
             this.broadcastKillAndQuest({ targetId: `slime_${sIdx}`, killerId: client.sessionId, killerName: player.name, xp: xpGain });
             this.clock.setTimeout(() => { const spawn = SLIME_SPAWNS[sIdx]; if (spawn) { const type = SLIME_TYPES[spawn.type]; slime.x = spawn.x * TILE_SIZE; slime.y = spawn.y * TILE_SIZE; slime.hp = type.hp; slime.maxHp = type.hp; slime.targetPlayerId = ""; slime.frostedUntil = 0; slime.alive = true; } }, SLIME_RESPAWN_MS);
@@ -2216,7 +2308,8 @@ export class GameRoom extends Room<GameState> {
             wolf.alive = false; wolf.targetPlayerId = "";
             const wolfId = player.targetId;
             player.targetId = "";
-            player.xp += WOLF_XP; player.gold += randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX);
+            player.xp += WOLF_XP;
+            this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
             checkLevelUp(player, this, client.sessionId);
             this.broadcastKillAndQuest({ targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
             this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.frostedUntil = 0; wolf.alive = true; }, WOLF_RESPAWN_MS);
@@ -2233,7 +2326,8 @@ export class GameRoom extends Room<GameState> {
             goblin.alive = false; goblin.targetPlayerId = "";
             const gId = player.targetId;
             player.targetId = "";
-            player.xp += GOBLIN_XP; player.gold += randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX);
+            player.xp += GOBLIN_XP;
+            this.spawnGroundLoot(goblin.x, goblin.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
             checkLevelUp(player, this, client.sessionId);
             this.broadcastKillAndQuest({ targetId: gId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
             this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.frostedUntil = 0; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
@@ -2250,7 +2344,8 @@ export class GameRoom extends Room<GameState> {
             skeleton.alive = false; skeleton.targetPlayerId = "";
             const sId = player.targetId;
             player.targetId = "";
-            player.xp += SKELETON_XP; player.gold += randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX);
+            player.xp += SKELETON_XP;
+            this.spawnGroundLoot(skeleton.x, skeleton.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
             checkLevelUp(player, this, client.sessionId);
             this.broadcastKillAndQuest({ targetId: sId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
             this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.frostedUntil = 0; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
@@ -2266,11 +2361,8 @@ export class GameRoom extends Room<GameState> {
             boss.alive = false;
             const bossId = player.targetId;
             player.targetId = "";
-            player.xp += BOSS_XP; player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
-            const loot = rollLoot("boss");
-            const lootNames: string[] = [];
-            for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
-            if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+            player.xp += BOSS_XP;
+            this.spawnGroundLoot(boss.x, boss.y, "boss", client.sessionId, randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX));
             checkLevelUp(player, this, client.sessionId);
             this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
             this.broadcastKillAndQuest({ targetId: bossId, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
@@ -2340,11 +2432,7 @@ export class GameRoom extends Room<GameState> {
           if (monster.targetPlayerId !== undefined) monster.targetPlayerId = "";
           if (player.targetId === mId) player.targetId = "";
           player.xp += xpGain;
-          player.gold += randRange(goldMin, goldMax);
-          const loot = rollLoot(lootTable);
-          const lootNames: string[] = [];
-          for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
-          if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+          this.spawnGroundLoot(monster.x, monster.y, lootTable, client.sessionId, randRange(goldMin, goldMax));
           this.broadcastKillAndQuest({ targetId: mId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
           if (onDeath) onDeath();
         }
@@ -2395,11 +2483,8 @@ export class GameRoom extends Room<GameState> {
         if (boss.hp <= 0) {
           boss.alive = false;
           if (player.targetId === id) player.targetId = "";
-          player.xp += BOSS_XP; player.gold += randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX);
-          const loot = rollLoot("boss");
-          const lootNames: string[] = [];
-          for (const drop of loot) { if (addToInventory(player, drop.itemId, drop.quantity)) { const it = ITEMS[drop.itemId]; lootNames.push(`${it?.icon || ""} ${it?.name || drop.itemId}${drop.quantity > 1 ? ` x${drop.quantity}` : ""}`); } }
-          if (lootNames.length > 0) client.send("loot_received", { items: lootNames });
+          player.xp += BOSS_XP;
+          this.spawnGroundLoot(boss.x, boss.y, "boss", client.sessionId, randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX));
           this.broadcast("boss_killed", { bossId: id, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
           this.broadcastKillAndQuest({ targetId: id, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
           this.clock.setTimeout(() => { this.broadcast("boss_warning", { bossType: boss.bossType, message: `⚠️ The Dragon stirs...` }); }, BOSS_RESPAWN_MS - BOSS_SPAWN_ANNOUNCE_MS);
@@ -2481,6 +2566,8 @@ export class GameRoom extends Room<GameState> {
     npcDialogueIndex.set(client.sessionId, new Map());
 
     client.send("world_data", { map: WORLD_MAP, npcs: NPCS, mapW: MAP_W, mapH: MAP_H });
+    // Send initial quest markers
+    this.sendQuestMarkers(client, player);
     console.log(`${player.name} (${cls}) joined (${client.sessionId})`);
   }
 

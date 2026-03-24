@@ -159,6 +159,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
   const goblinsRef = useRef<Map<string, GoblinData>>(new Map());
   const skeletonsRef = useRef<Map<string, SkeletonData>>(new Map());
   const bossesRef = useRef<Map<string, BossData>>(new Map());
+  const droppedItemsRef = useRef<Map<string, { id: string; itemId: string; quantity: number; x: number; y: number; droppedAt: number }>>(new Map());
+  const lastAutoPickupRef = useRef(0);
   const sessionIdRef = useRef("");
   const keysRef = useRef<Set<string>>(new Set());
   const [connected, setConnected] = useState(false);
@@ -778,6 +780,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         questNotifRef.current.push({ text: `❌ ${data.message}`, time: now, color: "#e74c3c" });
       });
 
+      room.onMessage("npc_quest_markers", (data: Record<string, string>) => {
+        const markers = npcQuestMarkersRef.current;
+        markers.clear();
+        for (const [npcId, markerType] of Object.entries(data)) {
+          markers.set(npcId, markerType as "available" | "turnin");
+        }
+      });
+
       room.onMessage("quest_completed_announce", (data: { playerName: string; questName: string; questIcon: string }) => {
         killFeedRef.current.push({ text: `${data.playerName} completed ${data.questIcon} ${data.questName}!`, time: performance.now() });
         if (killFeedRef.current.length > 8) killFeedRef.current.shift();
@@ -1066,6 +1076,19 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       });
       room.state.bosses.onRemove((_: any, id: string) => { bossesRef.current.delete(id); });
 
+      // Dropped items
+      room.state.droppedItems.onAdd((item: any, id: string) => {
+        droppedItemsRef.current.set(id, {
+          id, itemId: item.itemId, quantity: item.quantity,
+          x: item.x, y: item.y, droppedAt: item.droppedAt,
+        });
+        item.onChange(() => {
+          const d = droppedItemsRef.current.get(id);
+          if (d) { d.x = item.x; d.y = item.y; d.quantity = item.quantity; }
+        });
+      });
+      room.state.droppedItems.onRemove((_: any, id: string) => { droppedItemsRef.current.delete(id); });
+
       // Boss event messages
       room.onMessage("boss_spawn", (data: { bossId: string; bossType: string }) => {
         killFeedRef.current.push({ text: `🐉 A ${data.bossType === "dragon" ? "Dragon" : "Boss"} has appeared!`, time: performance.now() });
@@ -1179,6 +1202,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (d < TILE_SIZE && d < bestDist) { bestId = sid; bestDist = d; }
     });
 
+    // Check dropped items (click to pick up)
+    let closestDropId = "";
+    let closestDropDist = Infinity;
+    droppedItemsRef.current.forEach((drop, id) => {
+      const ix = drop.x + TILE_SIZE / 2;
+      const iy = drop.y + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - ix) ** 2 + (worldY - iy) ** 2);
+      if (d < TILE_SIZE && d < closestDropDist) { closestDropId = id; closestDropDist = d; }
+    });
+    
+    if (closestDropId && closestDropDist < bestDist) {
+      roomRef.current?.send("pickup_item", { itemId: closestDropId });
+      return;
+    }
+
     if (bestId) {
       // If clicking the same target, toggle it off
       const currentTarget = me.targetId || "";
@@ -1203,10 +1241,10 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
       if (dist <= 2 && dist < closestDist) { closest = npc; closestDist = dist; }
     }
     if (closest) {
+      // Always send npc_talk for quest checking; also open shop for merchant
+      roomRef.current?.send("npc_talk", { npcId: closest.id });
       if (closest.id === "merchant") {
         setShopOpen(prev => !prev);
-      } else {
-        roomRef.current?.send("npc_talk", { npcId: closest.id });
       }
     }
   }, []);
@@ -1389,6 +1427,21 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
           if (t >= 1) { b.displayX = b.toX; b.displayY = b.toY; b.fromX = b.toX; b.fromY = b.toY; b.moveStartTime = 0; }
         }
       });
+
+      // Auto-pickup dropped items when walking over them (throttled to every 200ms)
+      if (me && me.hp > 0 && now - (lastAutoPickupRef.current || 0) > 200) {
+        const px = me.displayX + TILE_SIZE / 2;
+        const py = me.displayY + TILE_SIZE / 2;
+        droppedItemsRef.current.forEach((drop, id) => {
+          const ix = drop.x + TILE_SIZE / 2;
+          const iy = drop.y + TILE_SIZE / 2;
+          const d = Math.sqrt((px - ix) ** 2 + (py - iy) ** 2);
+          if (d < TILE_SIZE * 0.8) {
+            roomRef.current?.send("pickup_item", { itemId: id });
+          }
+        });
+        lastAutoPickupRef.current = now;
+      }
 
       // Clean up timed effects
       chatBubblesRef.current = chatBubblesRef.current.filter(b => now - b.time < CHAT_DURATION);
@@ -1845,6 +1898,62 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.fillStyle = "#fff"; ctx.fillText(`${b.hp}/${b.maxHp}`, bx, bossHpY + bossHpH - 1);
       });
 
+      /* ── Ground Items (dropped loot) ────────────────── */
+      droppedItemsRef.current.forEach((drop) => {
+        const dx = drop.x + TILE_SIZE / 2 - camX;
+        const dy = drop.y + TILE_SIZE / 2 - camY;
+        if (dx < -40 || dx > w + 40 || dy < -40 || dy > h + 40) return;
+        
+        // Floating bob animation
+        const age = time - (drop.droppedAt || 0);
+        const bob = Math.sin(time / 400 + drop.x) * 3;
+        
+        // Glow effect
+        const glowAlpha = 0.3 + Math.sin(time / 500 + drop.y) * 0.15;
+        ctx.save();
+        
+        // Determine icon/color based on item
+        let icon = "📦";
+        let glowColor = "rgba(255, 215, 0, " + glowAlpha + ")";
+        const it = ITEMS[drop.itemId];
+        if (drop.itemId === "gold") {
+          icon = "🪙";
+          glowColor = "rgba(255, 215, 0, " + glowAlpha + ")";
+        } else if (it) {
+          icon = it.icon;
+          if (it.equipSlot) {
+            glowColor = "rgba(100, 200, 255, " + glowAlpha + ")"; // blue glow for equipment
+          } else {
+            glowColor = "rgba(50, 255, 50, " + glowAlpha + ")"; // green glow for consumables
+          }
+        }
+        
+        // Draw glow circle
+        ctx.beginPath();
+        ctx.arc(dx, dy + bob - 4, 14, 0, Math.PI * 2);
+        ctx.fillStyle = glowColor;
+        ctx.fill();
+        
+        // Draw item icon
+        ctx.font = "18px 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(icon, dx, dy + bob - 4);
+        
+        // Draw quantity if > 1
+        if (drop.quantity > 1) {
+          ctx.font = "bold 10px 'Segoe UI', sans-serif";
+          ctx.fillStyle = "#fff";
+          ctx.strokeStyle = "#000";
+          ctx.lineWidth = 2;
+          const qText = drop.itemId === "gold" ? `${drop.quantity}g` : `x${drop.quantity}`;
+          ctx.strokeText(qText, dx + 8, dy + bob + 6);
+          ctx.fillText(qText, dx + 8, dy + bob + 6);
+        }
+        
+        ctx.restore();
+      });
+
       /* ── NPCs ────────────────────────────────────────── */
 
       for (const npc of npcsRef.current) {
@@ -2254,33 +2363,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore }: Prop
         ctx.restore();
       }
 
-      // Update NPC quest markers each frame
-      const markers = npcQuestMarkersRef.current;
-      markers.clear();
-      if (activeQuests.length > 0) {
-        for (const q of activeQuests) {
-          if (q.completed) {
-            // Map quest to NPC
-            const npcMap: Record<string, string> = {
-              slime_hunt: "elder", wolf_menace: "elder",
-              goblin_raid: "innkeeper",
-              skeleton_scourge: "blacksmith",
-              dragon_slayer: "merchant",
-              slime_bounty: "fisherman", wolf_bounty: "fisherman",
-            };
-            const npcId = npcMap[q.questId];
-            if (npcId) markers.set(npcId, "turnin");
-          }
-        }
-      }
-      // Mark NPCs that have available quests (check all NPCs that might have quests)
-      const questNpcs = ["elder", "innkeeper", "blacksmith", "merchant", "fisherman"];
-      for (const npcId of questNpcs) {
-        if (!markers.has(npcId)) {
-          // Simple heuristic: show ! if NPC is a quest giver (we can't check prereqs client-side perfectly, so just show for all quest NPCs)
-          markers.set(npcId, "available");
-        }
-      }
+      // NPC quest markers are now driven by server via npc_quest_markers message
+      // (npcQuestMarkersRef is updated in the message handler)
 
       /* ── Quest Notifications (right side) ──── */
       
