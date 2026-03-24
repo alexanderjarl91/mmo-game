@@ -494,6 +494,58 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
 
 export class GameRoom extends Room<GameState> {
   maxClients = 50;
+  
+  // Track damage dealt to each monster: monsterId -> Map<sessionId, totalDamage>
+  damageTracker = new Map<string, Map<string, number>>();
+  
+  trackDamage(monsterId: string, sessionId: string, damage: number) {
+    if (!this.damageTracker.has(monsterId)) this.damageTracker.set(monsterId, new Map());
+    const tracker = this.damageTracker.get(monsterId)!;
+    tracker.set(sessionId, (tracker.get(sessionId) || 0) + damage);
+  }
+  
+  // Distribute XP proportionally by damage dealt, award gold/loot to killer only
+  distributeXp(monsterId: string, totalXp: number, killerSessionId: string) {
+    const tracker = this.damageTracker.get(monsterId);
+    if (!tracker || tracker.size === 0) {
+      // Fallback: all XP to killer
+      const killer = this.state.players.get(killerSessionId);
+      if (killer) { killer.xp += totalXp; this.checkLevelUp(killer, killerSessionId); }
+      return;
+    }
+    
+    const totalDamage = Array.from(tracker.values()).reduce((sum, d) => sum + d, 0);
+    
+    tracker.forEach((dmg, sessionId) => {
+      const player = this.state.players.get(sessionId);
+      if (!player || player.hp <= 0) return;
+      const share = Math.max(1, Math.round((dmg / totalDamage) * totalXp));
+      player.xp += share;
+      this.checkLevelUp(player, sessionId);
+      
+      // Show XP gain to non-killers
+      if (sessionId !== killerSessionId) {
+        const client = this.clients.find(c => c.sessionId === sessionId);
+        if (client) client.send("xp_share", { xp: share, monsterId });
+      }
+    });
+    
+    this.damageTracker.delete(monsterId);
+  }
+  
+  checkLevelUp(player: PlayerState, sessionId: string) {
+    const newLevel = levelFromXp(player.xp);
+    if (newLevel > player.level) {
+      const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+      player.level = newLevel;
+      player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
+      player.hp = player.maxHp;
+      player.attack = cfg.attackBase + (newLevel - 1) * 5;
+      player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
+      player.mp = player.maxMp;
+      this.broadcast("levelup", { sessionId, name: player.name, level: newLevel });
+    }
+  }
 
   // Send quest marker updates to a specific client
   sendQuestMarkers(client: Client, player: PlayerState) {
@@ -695,6 +747,7 @@ export class GameRoom extends Room<GameState> {
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       slime.hp = Math.max(0, slime.hp - damage);
       slime.targetPlayerId = client.sessionId; // aggro on attacker
+      this.trackDamage(player.targetId, client.sessionId, damage);
 
       // For ranger, send projectile
       if (player.playerClass === "ranger") {
@@ -709,13 +762,11 @@ export class GameRoom extends Room<GameState> {
 
       if (slime.hp <= 0) {
         slime.alive = false;
+        const slimeTargetId = player.targetId;
         slime.targetPlayerId = "";
         player.targetId = "";
-        const spawnIdx = parseInt(player.targetId.split("_")[1]) || 0;
         // Find spawn index from ID
         let sIdx = 0;
-        const parts = player.targetId.split("_");
-        // targetId already cleared, use the slime's id from the map
         this.state.slimes.forEach((s, id) => {
           if (s === slime) {
             const idx = parseInt(id.split("_")[1]);
@@ -724,18 +775,7 @@ export class GameRoom extends Room<GameState> {
         });
 
         const xpGain = SLIME_TYPES[SLIME_SPAWNS[sIdx]?.type || 0]?.xp || 25;
-        player.xp += xpGain;
-
-        const newLevel = levelFromXp(player.xp);
-        if (newLevel > player.level) {
-          player.level = newLevel;
-          player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
-          player.hp = player.maxHp;
-          player.attack = cfg.attackBase + (newLevel - 1) * 5;
-          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
-          player.mp = player.maxMp;
-          this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
-        }
+        this.distributeXp(slimeTargetId, xpGain, client.sessionId);
 
         // Drop loot on ground
         this.spawnGroundLoot(slime.x, slime.y, "slime", client.sessionId, randRange(SLIME_GOLD_MIN, SLIME_GOLD_MAX));
@@ -766,6 +806,7 @@ export class GameRoom extends Room<GameState> {
       }
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       wolf.hp = Math.max(0, wolf.hp - damage);
+      this.trackDamage(player.targetId, client.sessionId, damage);
 
       if (player.playerClass === "ranger") {
         this.broadcast("projectile", {
@@ -783,18 +824,7 @@ export class GameRoom extends Room<GameState> {
         player.targetId = "";
 
         const xpGain = WOLF_XP;
-        player.xp += xpGain;
-
-        const newLevel = levelFromXp(player.xp);
-        if (newLevel > player.level) {
-          player.level = newLevel;
-          player.maxHp = cfg.hpBase + (newLevel - 1) * 20;
-          player.hp = player.maxHp;
-          player.attack = cfg.attackBase + (newLevel - 1) * 5;
-          player.maxMp = cfg.mpBase + (newLevel - 1) * 10;
-          player.mp = player.maxMp;
-          this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel });
-        }
+        this.distributeXp(wolfId, xpGain, client.sessionId);
 
         // Drop loot on ground
         this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
@@ -872,6 +902,7 @@ export class GameRoom extends Room<GameState> {
       if (d > cfg.range) return;
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       goblin.hp = Math.max(0, goblin.hp - damage);
+      this.trackDamage(player.targetId, client.sessionId, damage);
 
       if (player.playerClass === "ranger") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblin.x + TILE_SIZE / 2, toY: goblin.y, attackerId: client.sessionId });
@@ -882,9 +913,7 @@ export class GameRoom extends Room<GameState> {
         goblin.alive = false;
         const goblinId = player.targetId;
         player.targetId = "";
-        player.xp += GOBLIN_XP;
-        const newLevel = levelFromXp(player.xp);
-        if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+        this.distributeXp(goblinId, GOBLIN_XP, client.sessionId);
         this.spawnGroundLoot(goblin.x, goblin.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
         this.broadcastKillAndQuest( { targetId: goblinId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
         this.clock.setTimeout(() => { goblin.x = goblin.spawnX; goblin.y = goblin.spawnY; goblin.hp = GOBLIN_HP; goblin.maxHp = GOBLIN_HP; goblin.targetPlayerId = ""; goblin.alive = true; }, GOBLIN_RESPAWN_MS);
@@ -899,6 +928,7 @@ export class GameRoom extends Room<GameState> {
       if (d > cfg.range) return;
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       skeleton.hp = Math.max(0, skeleton.hp - damage);
+      this.trackDamage(player.targetId, client.sessionId, damage);
 
       if (player.playerClass === "ranger") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skeleton.x + TILE_SIZE / 2, toY: skeleton.y, attackerId: client.sessionId });
@@ -909,9 +939,7 @@ export class GameRoom extends Room<GameState> {
         skeleton.alive = false;
         const skeletonId = player.targetId;
         player.targetId = "";
-        player.xp += SKELETON_XP;
-        const newLevel = levelFromXp(player.xp);
-        if (newLevel > player.level) { player.level = newLevel; player.maxHp = cfg.hpBase + (newLevel - 1) * 20; player.hp = player.maxHp; player.attack = cfg.attackBase + (newLevel - 1) * 5; player.maxMp = cfg.mpBase + (newLevel - 1) * 10; player.mp = player.maxMp; this.broadcast("levelup", { sessionId: client.sessionId, name: player.name, level: newLevel }); }
+        this.distributeXp(skeletonId, SKELETON_XP, client.sessionId);
         this.spawnGroundLoot(skeleton.x, skeleton.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
         this.broadcastKillAndQuest( { targetId: skeletonId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
         this.clock.setTimeout(() => { skeleton.x = skeleton.spawnX; skeleton.y = skeleton.spawnY; skeleton.hp = SKELETON_HP; skeleton.maxHp = SKELETON_HP; skeleton.targetPlayerId = ""; skeleton.alive = true; }, SKELETON_RESPAWN_MS);
@@ -926,6 +954,7 @@ export class GameRoom extends Room<GameState> {
       if (d > cfg.range) return;
       const damage = Math.max(1, player.attack + Math.floor(Math.random() * 10) - 5);
       boss.hp = Math.max(0, boss.hp - damage);
+      this.trackDamage(player.targetId, client.sessionId, damage);
 
       if (player.playerClass === "ranger") {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: boss.x + TILE_SIZE / 2, toY: boss.y, attackerId: client.sessionId });
@@ -942,7 +971,7 @@ export class GameRoom extends Room<GameState> {
         boss.alive = false;
         const bossId = player.targetId;
         player.targetId = "";
-        player.xp += BOSS_XP;
+        this.distributeXp(bossId, BOSS_XP, client.sessionId);
         this.spawnGroundLoot(boss.x, boss.y, "boss", client.sessionId, randRange(BOSS_GOLD_MIN, BOSS_GOLD_MAX));
         checkLevelUp(player, this, client.sessionId);
         this.broadcast("boss_killed", { bossId, bossType: boss.bossType, killerId: client.sessionId, killerName: player.name, xp: BOSS_XP });
