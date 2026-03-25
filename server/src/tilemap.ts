@@ -10,9 +10,14 @@ export const TILE = {
   WALL: 7,
   FLOOR: 8,
   TEMPLE: 9,
+  CAVE_FLOOR: 20,
+  CAVE_WALL: 21,
+  WEB: 22,
+  CAVE_ENTRY: 23,
+  CAVE_EXIT: 24,
 } as const;
 
-export const BLOCKED = new Set<number>([TILE.TREE, TILE.ROCK, TILE.WATER, TILE.WALL]);
+export const BLOCKED = new Set<number>([TILE.TREE, TILE.ROCK, TILE.WATER, TILE.WALL, TILE.CAVE_WALL]);
 
 export const MAP_W = 64;
 export const MAP_H = 64;
@@ -236,6 +241,48 @@ function generateMap(): number[][] {
   set(vmx - 1, vmy + 1, TILE.FLOWERS);
   set(vmx + 1, vmy + 1, TILE.FLOWERS);
 
+  // ── Spider Queen's Lair (NE corner dungeon) ──
+  // First, fill entire dungeon bounding box with CAVE_WALL
+  fill(48, 1, 62, 18, TILE.CAVE_WALL);
+
+  // Entrance room at ~(50, 16) — 5x3
+  fill(49, 15, 53, 17, TILE.CAVE_FLOOR);
+  set(50, 16, TILE.CAVE_EXIT); // exit portal
+  set(52, 16, TILE.CAVE_ENTRY); // entrance marker
+
+  // Room 1 (Spiderling Nest): (50-55, 12-14)
+  fill(50, 12, 55, 14, TILE.CAVE_FLOOR);
+  // Web decorations
+  set(51, 13, TILE.WEB);
+  set(54, 12, TILE.WEB);
+  set(53, 14, TILE.WEB);
+
+  // Tunnel from entrance to Room 1
+  fill(51, 15, 52, 15, TILE.CAVE_FLOOR); // already overlaps, but ensures connection
+
+  // Tunnel north from Room 1 to Room 2
+  fill(52, 10, 53, 11, TILE.CAVE_FLOOR);
+
+  // Room 2 (Web Chamber): (50-56, 7-9)
+  fill(50, 7, 56, 9, TILE.CAVE_FLOOR);
+  // Web decorations
+  set(51, 8, TILE.WEB);
+  set(53, 7, TILE.WEB);
+  set(55, 9, TILE.WEB);
+  set(50, 7, TILE.WEB);
+
+  // Tunnel from Room 2 to Boss
+  fill(53, 5, 54, 6, TILE.CAVE_FLOOR);
+
+  // Boss Chamber: large room (50-58, 2-4)
+  fill(50, 2, 58, 4, TILE.CAVE_FLOOR);
+  // Web decorations in boss room
+  set(51, 2, TILE.WEB);
+  set(57, 2, TILE.WEB);
+  set(50, 4, TILE.WEB);
+  set(58, 4, TILE.WEB);
+  set(54, 3, TILE.WEB);
+
   return map;
 }
 
@@ -328,6 +375,19 @@ export const NPCS: NPCDef[] = [
       "Rest here and your wounds shall heal swiftly.",
       "The temple's blessing restores body and spirit alike.",
       "May the light guide your path through the wilderness.",
+    ],
+  },
+  {
+    id: "cragbeard",
+    x: 36, y: 26,
+    name: "Old Cragbeard",
+    color: "#8B4513",
+    direction: "down",
+    dialogue: [
+      "Deep beneath the northern caves lies the Spider Queen's Lair...",
+      "Many have entered. Few return.",
+      "Recommended: Level 10, Party of 2+",
+      "The cave entrance lies to the northeast. Shall I guide you there?",
     ],
   },
 ];

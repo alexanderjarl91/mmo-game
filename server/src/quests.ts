@@ -110,6 +110,21 @@ export const QUESTS: Record<string, QuestDef> = {
     icon: "💰",
     repeatCooldownMs: 0,
   },
+  spider_queen: {
+    id: "spider_queen",
+    name: "The Spider Queen",
+    description: "Old Cragbeard has asked you to venture into the caves and slay the Spider Queen.",
+    npcId: "cragbeard",
+    killTarget: "spider_queen",
+    killCount: 1,
+    requiredLevel: 5,
+    rewards: {
+      xp: 500,
+      gold: 300,
+      items: [{ itemId: "venom_sac", quantity: 3 }],
+    },
+    icon: "🕷️",
+  },
 };
 
 // Get quests available from a specific NPC for a player

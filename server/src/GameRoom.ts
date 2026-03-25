@@ -1,13 +1,20 @@
 import { Room, Client } from "@colyseus/core";
 import { Schema, MapSchema, type } from "@colyseus/schema";
+import jwt from "jsonwebtoken";
 import { PlayerState } from "./PlayerState";
 import { SlimeState } from "./SlimeState";
 import { WolfState } from "./WolfState";
 import { GoblinState } from "./GoblinState";
 import { SkeletonState } from "./SkeletonState";
 import { BossState } from "./BossState";
+import { SpiderState } from "./SpiderState";
 import { InventorySlot } from "./InventorySlot";
 import { WORLD_MAP, BLOCKED, MAP_W, MAP_H, NPCS, TILE } from "./tilemap";
+import { loadCharacter, saveCharacter, deleteCharacter, batchSaveCharacters, getCharacterById, type CharacterRow } from "./db";
+
+const JWT_SECRET = process.env.JWT_SECRET || "mmo-dev-secret-change-in-prod";
+const TILE_SIZE_CONST = 64; // used for DB coordinate conversions
+const AUTOSAVE_INTERVAL_MS = 60000; // 60 seconds
 import { ITEMS, SHOP_ITEMS, INVENTORY_SIZE, rollLoot } from "./items";
 import type { EquipSlot } from "./items";
 import { QuestSlot } from "./QuestSlot";
@@ -21,7 +28,7 @@ const SLIME_RESPAWN_MS = 15000;
 const SLIME_MOVE_INTERVAL_MS = 800; // faster tick for chase behavior
 const SLIME_ATTACK_INTERVAL_MS = 2000;
 const SLIME_ATTACK_RANGE = 1;
-const SLIME_CHASE_RANGE = 8; // how far slime chases after aggro
+const SLIME_CHASE_RANGE = 15; // how far slime chases after aggro (de-aggro range)
 const SLIME_ATK = 8; // slime base damage
 // Tibia XP formula: total XP needed to reach level L = 50/3 * (L³ - 6L² + 17L - 12)
 function xpForLevel(level: number): number {
@@ -245,6 +252,10 @@ function applyDefense(rawDamage: number, defense: number, player?: PlayerState):
   if (player && player.buffShieldWallEnd > Date.now()) {
     dmg = Math.max(1, Math.floor(dmg * (1 - SHIELD_WALL_REDUCTION)));
   }
+  // Shielding skill reduction
+  if (player) {
+    dmg = Math.max(1, dmg - Math.floor(player.shieldingSkill * 0.3));
+  }
   return { damage: dmg, dodged: false };
 }
 
@@ -257,8 +268,46 @@ function rollCrit(critChance: number, damage: number): { damage: number; isCrit:
 
 // Calculate player damage with crit check. Variance is +/- 5 random.
 function calcPlayerDamage(player: PlayerState, multiplier: number = 1): { damage: number; isCrit: boolean } {
-  const baseDmg = Math.max(1, Math.floor(player.attack * multiplier) + Math.floor(Math.random() * 10) - 5);
+  let baseDmg = Math.max(1, Math.floor(player.attack * multiplier) + Math.floor(Math.random() * 10) - 5);
+  // Skill bonus: melee for range <= 1, ranged for range > 1
+  const cfg = CLASS_CONFIG[player.playerClass] || CLASS_CONFIG.warrior;
+  if (cfg.range <= 1) {
+    baseDmg += Math.floor(player.meleeSkill * 0.5);
+  } else {
+    baseDmg += Math.floor(player.rangedSkill * 0.5);
+  }
   return rollCrit(player.critChance, baseDmg);
+}
+
+// ── Skill System ──
+const SKILL_MULTIPLIERS: Record<string, { melee: number; ranged: number; magic: number; shielding: number }> = {
+  warrior: { melee: 1.5, ranged: 0.5, magic: 0.5, shielding: 1.5 },
+  ranger: { melee: 0.5, ranged: 1.5, magic: 0.8, shielding: 0.8 },
+  mage: { melee: 0.5, ranged: 0.8, magic: 1.5, shielding: 0.5 },
+  rogue: { melee: 1.2, ranged: 0.5, magic: 0.5, shielding: 0.8 },
+};
+
+function triesForSkillLevel(level: number): number {
+  return Math.floor(50 * Math.pow(1.1, level));
+}
+
+function addSkillTries(player: PlayerState, skill: 'melee' | 'ranged' | 'magic' | 'shielding', room: GameRoom, sessionId: string) {
+  const mult = SKILL_MULTIPLIERS[player.playerClass]?.[skill] || 1;
+  const triesKey = `${skill}Tries` as 'meleeTries' | 'rangedTries' | 'magicTries' | 'shieldingTries';
+  const skillKey = `${skill}Skill` as 'meleeSkill' | 'rangedSkill' | 'magicSkill' | 'shieldingSkill';
+
+  player[triesKey] += mult;
+  const currentLevel = player[skillKey];
+  const needed = triesForSkillLevel(currentLevel);
+
+  if (player[triesKey] >= needed) {
+    player[triesKey] -= needed;
+    player[skillKey] = currentLevel + 1;
+    const client = room.clients.find(c => c.sessionId === sessionId);
+    if (client) {
+      client.send("skill_up", { skill, level: currentLevel + 1 });
+    }
+  }
 }
 
 function updateQuestProgress(player: PlayerState, monsterType: string, room: GameRoom, sessionId: string) {
@@ -344,7 +393,7 @@ const WOLF_HP = 150;
 const WOLF_ATK = 20;
 const WOLF_XP = 75;
 const WOLF_CHASE_RANGE = 8; // tiles — aggro radius
-const WOLF_LEASH_RANGE = 16; // tiles — how far they chase before giving up
+const WOLF_LEASH_RANGE = 15; // tiles — how far they chase before giving up
 const WOLF_ATTACK_RANGE = 1; // melee
 const WOLF_MOVE_INTERVAL_MS = 500; // slightly faster than player movement
 const WOLF_ATTACK_INTERVAL_MS = 1500;
@@ -356,7 +405,7 @@ const GOBLIN_HP = 80;
 const GOBLIN_ATK = 15;
 const GOBLIN_XP = 50;
 const GOBLIN_CHASE_RANGE = 6;
-const GOBLIN_LEASH_RANGE = 12;
+const GOBLIN_LEASH_RANGE = 15;
 const GOBLIN_MOVE_INTERVAL_MS = 450;
 const GOBLIN_ATTACK_INTERVAL_MS = 1400;
 const GOBLIN_RESPAWN_MS = 25000;
@@ -369,7 +418,7 @@ const SKELETON_HP = 200;
 const SKELETON_ATK = 30;
 const SKELETON_XP = 120;
 const SKELETON_CHASE_RANGE = 10;
-const SKELETON_LEASH_RANGE = 18;
+const SKELETON_LEASH_RANGE = 15;
 const SKELETON_MOVE_INTERVAL_MS = 600;
 const SKELETON_ATTACK_INTERVAL_MS = 2000;
 const SKELETON_RESPAWN_MS = 45000;
@@ -394,6 +443,61 @@ const BOSS_PHASE2_ATK_MULT = 1.5;
 const BOSS_AOE_CHANCE = 0.3; // 30% chance for AOE attack
 const BOSS_AOE_RANGE = 2; // 2 tiles AOE radius
 const BOSS_BURN_CHANCE = 0.5; // 50% chance to burn on hit
+
+// Spider Queen dungeon constants
+const SPIDER_QUEEN_HP = 3000;
+const SPIDER_QUEEN_ATK = 35;
+const SPIDER_QUEEN_DEF = 15;
+const SPIDER_QUEEN_XP = 800;
+const SPIDER_QUEEN_ATTACK_SPEED = 1500;
+const SPIDER_QUEEN_ENRAGED_SPEED = 1000;
+const SPIDER_QUEEN_ENRAGED_ATK = 45;
+const SPIDER_QUEEN_RESPAWN = 600000; // 10 minutes
+const SPIDER_QUEEN_AGGRO = 10;
+const SPIDER_QUEEN_LEASH = 20;
+const BROOD_SPAWN_INTERVAL_P1 = 25000;
+const BROOD_SPAWN_INTERVAL_P2 = 20000;
+const POISON_WAVE_INTERVAL = 20000;
+const POISON_WAVE_RANGE = 4;
+const MAX_BROOD_SPIDERS = 6;
+const BOSS_ENRAGE_TIMER = 300000; // 5 min hard enrage
+
+const SPIDER_CONFIGS: Record<string, { hp: number; atk: number; xp: number; moveMs: number; aggroRange: number; attackMs: number; respawnMs: number; goldMin: number; goldMax: number; lootTable: string }> = {
+  baby:   { hp: 60,  atk: 10, xp: 30,  moveMs: 400, aggroRange: 6, attackMs: 1200, respawnMs: 45000, goldMin: 8,  goldMax: 20,  lootTable: "spider_baby" },
+  cave:   { hp: 120, atk: 18, xp: 60,  moveMs: 600, aggroRange: 6, attackMs: 1500, respawnMs: 60000, goldMin: 15, goldMax: 35,  lootTable: "spider_cave" },
+  poison: { hp: 180, atk: 22, xp: 90,  moveMs: 550, aggroRange: 6, attackMs: 1400, respawnMs: 90000, goldMin: 25, goldMax: 50,  lootTable: "spider_poison" },
+  elite:  { hp: 300, atk: 30, xp: 150, moveMs: 500, aggroRange: 8, attackMs: 1300, respawnMs: 0,     goldMin: 40, goldMax: 80,  lootTable: "spider_elite" },
+};
+const SPIDER_LEASH = 15;
+
+// Dungeon entrance/exit positions
+const DUNGEON_ENTRY_X = 50;
+const DUNGEON_ENTRY_Y = 16;
+const CRAGBEARD_X = 36;
+const CRAGBEARD_Y = 26;
+
+// Spider Queen boss position
+const SPIDER_QUEEN_X = 54;
+const SPIDER_QUEEN_Y = 3;
+
+// Spider spawn definitions for dungeon
+const DUNGEON_SPIDER_SPAWNS: Array<{ x: number; y: number; type: string }> = [
+  // Room 1 (Spiderling Nest): 4x baby
+  { x: 51, y: 12, type: "baby" }, { x: 53, y: 13, type: "baby" },
+  { x: 50, y: 14, type: "baby" }, { x: 55, y: 13, type: "baby" },
+  // Tunnel: 2x cave
+  { x: 52, y: 11, type: "cave" }, { x: 53, y: 10, type: "cave" },
+  // Room 2 (Web Chamber): 3x cave + 2x poison
+  { x: 51, y: 8, type: "cave" }, { x: 54, y: 7, type: "cave" }, { x: 56, y: 9, type: "cave" },
+  { x: 52, y: 9, type: "poison" }, { x: 55, y: 8, type: "poison" },
+  // Tunnel to boss: 1x poison
+  { x: 53, y: 6, type: "poison" },
+  // Pre-boss area: 4x poison (edge of boss room)
+  { x: 50, y: 4, type: "poison" }, { x: 52, y: 4, type: "poison" },
+  { x: 56, y: 4, type: "poison" }, { x: 58, y: 4, type: "poison" },
+  // Boss room: 2x elite (spawn with boss)
+  { x: 52, y: 3, type: "elite" }, { x: 56, y: 3, type: "elite" },
+];
 
 // World Event constants
 const WORLD_EVENT_MIN_INTERVAL_MS = 120000; // 2 minutes minimum between events
@@ -463,6 +567,7 @@ export class GameState extends Schema {
   @type({ map: GoblinState }) goblins = new MapSchema<GoblinState>();
   @type({ map: SkeletonState }) skeletons = new MapSchema<SkeletonState>();
   @type({ map: BossState }) bosses = new MapSchema<BossState>();
+  @type({ map: SpiderState }) spiders = new MapSchema<SpiderState>();
   @type({ map: DroppedItem }) droppedItems = new MapSchema<DroppedItem>();
   @type({ map: WorldEventState }) worldEvents = new MapSchema<WorldEventState>();
 }
@@ -536,6 +641,9 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
 export class GameRoom extends Room<GameState> {
   maxClients = 50;
   
+  // Auth data: sessionId -> { userId, characterId }
+  authData = new Map<string, { userId: number; characterId: number }>();
+  
   // Track damage dealt to each monster: monsterId -> Map<sessionId, totalDamage>
   damageTracker = new Map<string, Map<string, number>>();
   
@@ -585,6 +693,187 @@ export class GameRoom extends Room<GameState> {
     }
   }
 
+  // ── Serialize player state to DB-compatible data ──
+  serializePlayer(player: PlayerState): Parameters<typeof saveCharacter>[1] {
+    // Serialize inventory ArraySchema to JSON array
+    const invArr: Array<{ itemId: string; quantity: number }> = [];
+    for (let i = 0; i < player.inventory.length; i++) {
+      const slot = player.inventory.at(i);
+      if (slot && slot.itemId) {
+        invArr.push({ itemId: slot.itemId, quantity: slot.quantity });
+      }
+    }
+
+    // Serialize completedQuestIds Set to JSON array
+    const completedQuests = JSON.stringify(Array.from(player.completedQuestIds));
+
+    // Serialize active quests ArraySchema to JSON array
+    const activeQuestsArr: Array<{ questId: string; progress: number; required: number; completed: boolean; turnedIn: boolean }> = [];
+    for (let i = 0; i < player.quests.length; i++) {
+      const q = player.quests.at(i);
+      if (q && q.questId && !q.turnedIn) {
+        activeQuestsArr.push({
+          questId: q.questId,
+          progress: q.progress,
+          required: q.required,
+          completed: q.completed,
+          turnedIn: q.turnedIn,
+        });
+      }
+    }
+
+    return {
+      level: player.level,
+      xp: player.xp,
+      gold: player.gold,
+      hp: player.hp,
+      maxHp: player.maxHp,
+      mp: player.mp,
+      maxMp: player.maxMp,
+      attack: player.attack,
+      defense: player.defense,
+      critChance: player.critChance,
+      dodgeChance: player.dodgeChance,
+      mpRegen: player.mpRegen,
+      attackInterval: player.attackInterval,
+      equipWeapon: player.equipWeapon,
+      equipHelmet: player.equipHelmet,
+      equipChest: player.equipChest,
+      equipLegs: player.equipLegs,
+      equipBoots: player.equipBoots,
+      inventory: JSON.stringify(invArr),
+      completedQuests,
+      activeQuests: JSON.stringify(activeQuestsArr),
+      x: player.x / TILE_SIZE,
+      y: player.y / TILE_SIZE,
+      meleeSkill: player.meleeSkill,
+      meleeTries: player.meleeTries,
+      rangedSkill: player.rangedSkill,
+      rangedTries: player.rangedTries,
+      magicSkill: player.magicSkill,
+      magicTries: player.magicTries,
+      shieldingSkill: player.shieldingSkill,
+      shieldingTries: player.shieldingTries,
+    };
+  }
+
+  // ── Hydrate a PlayerState from DB row ──
+  hydratePlayer(player: PlayerState, dbData: CharacterRow) {
+    player.name = dbData.name;
+    player.playerClass = dbData.class;
+    player.level = dbData.level;
+    player.xp = dbData.xp;
+    player.gold = dbData.gold;
+    player.isHardcore = !!dbData.is_hardcore;
+
+    // Position: use saved or default village center
+    const savedX = dbData.x || 36;
+    const savedY = dbData.y || 37;
+    player.x = savedX * TILE_SIZE;
+    player.y = savedY * TILE_SIZE;
+
+    // Equipment
+    player.equipWeapon = dbData.equip_weapon || "";
+    player.equipHelmet = dbData.equip_helmet || "";
+    player.equipChest = dbData.equip_chest || "";
+    player.equipLegs = dbData.equip_legs || "";
+    player.equipBoots = dbData.equip_boots || "";
+
+    // Recalc stats with equipment
+    recalcEquipBonuses(player);
+
+    // Restore HP/MP from DB (capped at max)
+    player.hp = Math.min(dbData.hp, player.maxHp);
+    player.mp = Math.min(dbData.mp, player.maxMp);
+
+    // Inventory
+    try {
+      const invArr = JSON.parse(dbData.inventory || "[]") as Array<{ itemId: string; quantity: number }>;
+      for (const slot of invArr) {
+        if (slot.itemId && ITEMS[slot.itemId] && slot.quantity > 0) {
+          addToInventory(player, slot.itemId, Math.min(slot.quantity, ITEMS[slot.itemId].maxStack));
+        }
+      }
+    } catch {}
+
+    // Completed quests
+    try {
+      const completed = JSON.parse(dbData.completed_quests || "[]") as string[];
+      for (const qid of completed) {
+        player.completedQuestIds.add(qid);
+      }
+    } catch {}
+
+    // Active quests
+    try {
+      const activeQuests = JSON.parse(dbData.active_quests || "[]") as Array<{
+        questId: string; progress: number; required: number; completed: boolean; turnedIn: boolean;
+      }>;
+      for (const aq of activeQuests) {
+        if (aq.questId && QUESTS[aq.questId]) {
+          const slot = new QuestSlot();
+          slot.questId = aq.questId;
+          slot.progress = aq.progress;
+          slot.required = aq.required;
+          slot.completed = aq.completed;
+          slot.turnedIn = aq.turnedIn;
+          player.quests.push(slot);
+        }
+      }
+    } catch {}
+
+    // Skills
+    player.meleeSkill = dbData.melee_skill || 1;
+    player.meleeTries = dbData.melee_tries || 0;
+    player.rangedSkill = dbData.ranged_skill || 1;
+    player.rangedTries = dbData.ranged_tries || 0;
+    player.magicSkill = dbData.magic_skill || 1;
+    player.magicTries = dbData.magic_tries || 0;
+    player.shieldingSkill = dbData.shielding_skill || 1;
+    player.shieldingTries = dbData.shielding_tries || 0;
+
+    // Other defaults
+    player.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    player.direction = "down";
+    player.moving = false;
+    player.targetId = "";
+  }
+
+  // ── Save all current players to DB ──
+  saveAllPlayers() {
+    const entries: Array<{ characterId: number; data: Parameters<typeof saveCharacter>[1] }> = [];
+    this.state.players.forEach((player, sessionId) => {
+      const auth = this.authData.get(sessionId);
+      if (!auth) return;
+      entries.push({ characterId: auth.characterId, data: this.serializePlayer(player) });
+    });
+    if (entries.length > 0) {
+      try {
+        batchSaveCharacters(entries);
+      } catch (err) {
+        console.error("[AUTOSAVE] Error saving players:", err);
+      }
+    }
+  }
+
+  // ── JWT auth on connect ──
+  async onAuth(client: Client, options: any) {
+    const token = options?.token;
+    const characterId = options?.characterId;
+    if (!token) throw new Error("No auth token provided");
+    if (!characterId || typeof characterId !== "number") throw new Error("No character selected");
+
+    try {
+      const payload = jwt.verify(token, JWT_SECRET) as { userId: number; email: string };
+      const charData = getCharacterById(characterId);
+      if (!charData) throw new Error("Character not found");
+      if (charData.user_id !== payload.userId) throw new Error("Character does not belong to this account");
+      return { userId: payload.userId, characterId: charData.id, charData };
+    } catch (err: any) {
+      throw new Error(err.message || "Invalid token");
+    }
+  }
+
   // Send quest marker updates to a specific client
   sendQuestMarkers(client: Client, player: PlayerState) {
     const activeQuestIds = new Set<string>();
@@ -597,7 +886,7 @@ export class GameRoom extends Room<GameState> {
       }
     }
 
-    const questNpcs = ["elder", "innkeeper", "blacksmith", "merchant", "fisherman"];
+    const questNpcs = ["elder", "innkeeper", "blacksmith", "merchant", "fisherman", "cragbeard"];
     const markers: Record<string, string> = {};
     
     // First check turn-ins (? markers)
@@ -674,6 +963,8 @@ export class GameRoom extends Room<GameState> {
     else if (tid.startsWith("goblin_")) monsterType = "goblin";
     else if (tid.startsWith("skeleton_")) monsterType = "skeleton";
     else if (tid.startsWith("boss_")) monsterType = "boss";
+    else if (tid === "spider_queen") monsterType = "spider_queen";
+    else if (tid.startsWith("spider_")) monsterType = "spider";
     if (monsterType) {
       updateQuestProgress(player, monsterType, this, data.killerId);
     }
@@ -688,7 +979,7 @@ export class GameRoom extends Room<GameState> {
     return occupied;
   }
 
-  isTileOccupiedByMonster(newX: number, newY: number, excludeSlimeId?: string, excludeWolfId?: string, excludeGoblinId?: string, excludeSkeletonId?: string): boolean {
+  isTileOccupiedByMonster(newX: number, newY: number, excludeSlimeId?: string, excludeWolfId?: string, excludeGoblinId?: string, excludeSkeletonId?: string, excludeSpiderId?: string): boolean {
     for (const [id, slime] of this.state.slimes) {
       if (id === excludeSlimeId || !slime.alive) continue;
       if (slime.x === newX && slime.y === newY) return true;
@@ -705,7 +996,26 @@ export class GameRoom extends Room<GameState> {
       if (id === excludeSkeletonId || !skeleton.alive) continue;
       if (skeleton.x === newX && skeleton.y === newY) return true;
     }
+    for (const [id, spider] of this.state.spiders) {
+      if (id === excludeSpiderId || !spider.alive) continue;
+      if (spider.x === newX && spider.y === newY) return true;
+    }
     return false;
+  }
+
+  // Called whenever a player's HP reaches 0 — handles hardcore deletion
+  handlePlayerDeath(sessionId: string, player: PlayerState) {
+    if (player.isHardcore) {
+      const auth = this.authData.get(sessionId);
+      if (auth) {
+        try {
+          deleteCharacter(auth.characterId);
+          console.log(`[HARDCORE] ${player.name} died — character deleted from DB`);
+        } catch (err) {
+          console.error("Error deleting hardcore char:", err);
+        }
+      }
+    }
   }
 
   respawnPlayer(player: PlayerState) {
@@ -735,6 +1045,125 @@ export class GameRoom extends Room<GameState> {
     player.targetId = "";
     player.statusEffect = "";
     player.statusEffectEnd = 0;
+  }
+
+  // Spider Queen alive flag
+  spiderQueenAlive: boolean = true;
+  spiderQueenFirstAggro: number = 0;
+  lastBroodSpawnTime: number = 0;
+  lastPoisonWaveTime: number = 0;
+  broodCounter: number = 0;
+
+  handleSpiderQueenDeath(killerSessionId: string, killerName: string, queen: SpiderState) {
+    this.spiderQueenAlive = false;
+    this.spiderQueenFirstAggro = 0;
+
+    // Kill all brood and elite spiders
+    this.state.spiders.forEach((sp) => {
+      if (sp.isBrood || sp.spiderType === "elite") {
+        sp.alive = false;
+        sp.hp = 0;
+      }
+    });
+
+    // Spawn boss loot
+    this.spawnSpiderQueenLoot(queen.x, queen.y, killerSessionId);
+
+    // Update quest progress for killer
+    const killer = this.state.players.get(killerSessionId);
+    if (killer) {
+      updateQuestProgress(killer, "spider_queen", this, killerSessionId);
+    }
+
+    // Broadcast kill
+    this.broadcast("boss_killed", { bossId: "spider_queen", bossType: "spider_queen", killerId: killerSessionId, killerName, xp: SPIDER_QUEEN_XP });
+    this.broadcast("screen_shake", {});
+    this.broadcast("kill_feed", { text: `🕷️ The Spider Queen has been slain by ${killerName}!` });
+
+    // Schedule respawn
+    this.clock.setTimeout(() => {
+      this.broadcast("boss_warning", { bossType: "spider_queen", message: "🕷️ The Spider Queen stirs in the depths..." });
+    }, SPIDER_QUEEN_RESPAWN - 10000);
+
+    this.clock.setTimeout(() => {
+      this.respawnSpiderQueen();
+    }, SPIDER_QUEEN_RESPAWN);
+  }
+
+  respawnSpiderQueen() {
+    this.spiderQueenAlive = true;
+    this.spiderQueenFirstAggro = 0;
+    this.lastBroodSpawnTime = 0;
+    this.lastPoisonWaveTime = 0;
+
+    // Respawn queen
+    const queen = this.state.spiders.get("spider_queen");
+    if (queen) {
+      queen.x = SPIDER_QUEEN_X * TILE_SIZE;
+      queen.y = SPIDER_QUEEN_Y * TILE_SIZE;
+      queen.hp = SPIDER_QUEEN_HP;
+      queen.maxHp = SPIDER_QUEEN_HP;
+      queen.alive = true;
+      queen.phase = 1;
+      queen.targetPlayerId = "";
+    }
+
+    // Respawn elites
+    this.state.spiders.forEach((sp) => {
+      if (sp.spiderType === "elite" && !sp.isBrood) {
+        sp.x = sp.spawnX; sp.y = sp.spawnY;
+        sp.hp = SPIDER_CONFIGS.elite.hp; sp.maxHp = SPIDER_CONFIGS.elite.hp;
+        sp.alive = true; sp.targetPlayerId = "";
+      }
+    });
+
+    // Respawn all dungeon trash
+    DUNGEON_SPIDER_SPAWNS.forEach((spawn, i) => {
+      if (spawn.type === "elite") return; // already handled
+      const sp = this.state.spiders.get(`spider_${i}`);
+      if (sp) {
+        const cfg = SPIDER_CONFIGS[spawn.type];
+        sp.x = spawn.x * TILE_SIZE; sp.y = spawn.y * TILE_SIZE;
+        sp.hp = cfg.hp; sp.maxHp = cfg.hp;
+        sp.alive = true; sp.targetPlayerId = "";
+      }
+    });
+
+    // Remove brood spiders
+    const broodIds: string[] = [];
+    this.state.spiders.forEach((sp, id) => { if (sp.isBrood) broodIds.push(id); });
+    broodIds.forEach(id => this.state.spiders.delete(id));
+
+    this.broadcast("boss_spawn", { bossId: "spider_queen", bossType: "spider_queen" });
+  }
+
+  spawnSpiderQueenLoot(x: number, y: number, killerId: string) {
+    // Always: 300-600 gold
+    this.spawnGroundLoot(x, y, "spider_elite", killerId, randRange(300, 600));
+
+    // Roll for rare item
+    const roll = Math.random() * 100;
+    let itemId = "";
+    if (roll < 15) itemId = "venomfang_dagger";
+    else if (roll < 30) itemId = "spidersilk_robe";
+    else if (roll < 40) itemId = "crown_of_webbing";
+    else if (roll < 55) itemId = "spiderleg_boots";
+    else if (roll < 85) itemId = "venom_sac";
+
+    if (itemId) {
+      // Spawn as dropped item
+      const id = `drop_${droppedItemCounter++}`;
+      const item = new DroppedItem();
+      item.id = id;
+      item.itemId = itemId;
+      item.quantity = 1;
+      item.x = x + TILE_SIZE;
+      item.y = y;
+      item.droppedAt = Date.now();
+      item.ownerSessionId = killerId;
+      this.state.droppedItems.set(id, item);
+      this.clock.setTimeout(() => { this.state.droppedItems.delete(id); }, 60000);
+    }
   }
 
   // Perform one attack from player against their target
@@ -767,6 +1196,8 @@ export class GameRoom extends Room<GameState> {
       }
 
       this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
+      // Skill training: melee or ranged depending on class range
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
 
       if (slime.hp <= 0) {
         slime.alive = false;
@@ -825,6 +1256,7 @@ export class GameRoom extends Room<GameState> {
       }
 
       this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
 
       if (wolf.hp <= 0) {
         wolf.alive = false;
@@ -887,8 +1319,12 @@ export class GameRoom extends Room<GameState> {
         targetId: player.targetId, attackerId: client.sessionId,
         attackerName: player.name, damage: finalDmg, isCrit,
       });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
+      // Target trains shielding by getting hit
+      addSkillTries(target, 'shielding', this, player.targetId);
 
       if (target.hp <= 0) {
+        const targetSid = player.targetId;
         const xpGain = 50 + target.level * 10;
         player.xp += xpGain;
         player.gold += randRange(PVP_GOLD_MIN, PVP_GOLD_MAX);
@@ -898,9 +1334,9 @@ export class GameRoom extends Room<GameState> {
 
         this.broadcast("pvp_kill", {
           killerId: client.sessionId, killerName: player.name,
-          targetId: player.targetId, targetName: target.name, xp: xpGain,
+          targetId: targetSid, targetName: target.name, xp: xpGain,
         });
-
+        this.handlePlayerDeath(targetSid, target);
       }
       return;
     }
@@ -918,6 +1354,7 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblin.x + TILE_SIZE / 2, toY: goblin.y, attackerId: client.sessionId });
       }
       this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
 
       if (goblin.hp <= 0) {
         goblin.alive = false;
@@ -944,6 +1381,7 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skeleton.x + TILE_SIZE / 2, toY: skeleton.y, attackerId: client.sessionId });
       }
       this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
 
       if (skeleton.hp <= 0) {
         skeleton.alive = false;
@@ -970,6 +1408,7 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: boss.x + TILE_SIZE / 2, toY: boss.y, attackerId: client.sessionId });
       }
       this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
 
       // Phase change at 40% HP
       if (boss.hp > 0 && boss.hp <= boss.maxHp * BOSS_PHASE2_HP_RATIO && boss.phase === 1) {
@@ -1001,6 +1440,61 @@ export class GameRoom extends Room<GameState> {
           boss.alive = true;
           this.broadcast("boss_spawn", { bossId: boss.id, bossType: boss.bossType });
         }, BOSS_RESPAWN_MS);
+      }
+      return;
+    }
+
+    // Try spider target
+    const spider = this.state.spiders.get(player.targetId);
+    if (spider && spider.alive) {
+      const d = dist(px, py, spider.x, spider.y);
+      if (d > cfg.range) return;
+      const { damage, isCrit } = calcPlayerDamage(player);
+      // Elite spiders have defense
+      let finalDmg = damage;
+      if (spider.spiderType === "elite" || spider.spiderType === "queen") {
+        const spDef = spider.spiderType === "queen" ? SPIDER_QUEEN_DEF : 10;
+        finalDmg = Math.max(1, Math.floor(damage * 100 / (100 + spDef)));
+      }
+      spider.hp = Math.max(0, spider.hp - finalDmg);
+      spider.targetPlayerId = client.sessionId;
+      this.trackDamage(player.targetId, client.sessionId, finalDmg);
+
+      if (player.playerClass === "ranger" || player.playerClass === "mage") {
+        this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: spider.x + TILE_SIZE / 2, toY: spider.y, attackerId: client.sessionId });
+      }
+      this.broadcast("hit", { targetId: player.targetId, damage: finalDmg, attackerId: client.sessionId, isCrit });
+      addSkillTries(player, cfg.range <= 1 ? 'melee' : 'ranged', this, client.sessionId);
+
+      // Spider Queen phase change at 50% HP
+      if (spider.spiderType === "queen" && spider.hp > 0 && spider.hp <= spider.maxHp * 0.5 && spider.phase === 1) {
+        spider.phase = 2;
+        this.broadcast("boss_enrage", { bossId: spider.id, bossType: "spider_queen" });
+      }
+
+      if (spider.hp <= 0) {
+        spider.alive = false;
+        const spiderId = player.targetId;
+        player.targetId = "";
+        const spCfg = SPIDER_CONFIGS[spider.spiderType];
+        const xpGain = spider.spiderType === "queen" ? SPIDER_QUEEN_XP : (spCfg?.xp || 30);
+        this.distributeXp(spiderId, xpGain, client.sessionId);
+
+        if (spider.spiderType === "queen") {
+          this.handleSpiderQueenDeath(client.sessionId, player.name, spider);
+        } else if (!spider.isBrood && spCfg && spCfg.respawnMs > 0) {
+          this.spawnGroundLoot(spider.x, spider.y, spCfg.lootTable, client.sessionId, randRange(spCfg.goldMin, spCfg.goldMax));
+          this.broadcastKillAndQuest({ targetId: spiderId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+          this.clock.setTimeout(() => {
+            spider.x = spider.spawnX; spider.y = spider.spawnY;
+            spider.hp = spCfg.hp; spider.maxHp = spCfg.hp;
+            spider.alive = true; spider.targetPlayerId = "";
+          }, spCfg.respawnMs);
+        } else {
+          // Brood or elite — no respawn, but drop loot
+          if (spCfg) this.spawnGroundLoot(spider.x, spider.y, spCfg.lootTable, client.sessionId, randRange(spCfg.goldMin, spCfg.goldMax));
+          this.broadcastKillAndQuest({ targetId: spiderId, killerId: client.sessionId, killerName: player.name, xp: xpGain });
+        }
       }
       return;
     }
@@ -1246,10 +1740,12 @@ export class GameRoom extends Room<GameState> {
               y: closest.y,
               attackerId: wolf.id,
             });
+            addSkillTries(closest, 'shielding', this, closestSid);
             }
             if (closest.hp <= 0) {
               wolf.targetPlayerId = "";
               this.broadcast("kill", { targetId: closestSid, killerId: wolf.id, killerName: "Wolf", xp: 0 });
+              this.handlePlayerDeath(closestSid, closest);
             }
           }
           return;
@@ -1310,10 +1806,13 @@ export class GameRoom extends Room<GameState> {
                 y: target.y,
                 attackerId: slimeId,
               });
+              addSkillTries(target, 'shielding', this, slime.targetPlayerId);
               }
               if (target.hp <= 0) {
+                const deadSid = slime.targetPlayerId;
                 slime.targetPlayerId = "";
-                this.broadcast("kill", { targetId: slime.targetPlayerId, killerId: slimeId, killerName: "Slime", xp: 0 });
+                this.broadcast("kill", { targetId: deadSid, killerId: slimeId, killerName: "Slime", xp: 0 });
+                this.handlePlayerDeath(deadSid, target);
               }
             }
             return; // don't move while attacking
@@ -1455,6 +1954,7 @@ export class GameRoom extends Room<GameState> {
             const damage = defResult.damage;
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: goblin.id });
+            addSkillTries(closest, 'shielding', this, closestSid);
             }
             // Goblins apply poison (only if not dodged)
             if (!defResult.dodged && Math.random() < POISON_CHANCE) {
@@ -1465,6 +1965,7 @@ export class GameRoom extends Room<GameState> {
               goblin.targetPlayerId = "";
               closest.statusEffect = ""; closest.statusEffectEnd = 0;
               this.broadcast("kill", { targetId: closestSid, killerId: goblin.id, killerName: "Goblin", xp: 0 });
+              this.handlePlayerDeath(closestSid, closest);
             }
           }
           return;
@@ -1535,6 +2036,7 @@ export class GameRoom extends Room<GameState> {
             const damage = defResult.damage;
             closest.hp = Math.max(0, closest.hp - damage);
             this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: skeleton.id });
+            addSkillTries(closest, 'shielding', this, closestSid);
             }
             // Skeletons apply burn (only if not dodged)
             if (!defResult.dodged && Math.random() < BURN_CHANCE) {
@@ -1545,6 +2047,7 @@ export class GameRoom extends Room<GameState> {
               skeleton.targetPlayerId = "";
               closest.statusEffect = ""; closest.statusEffectEnd = 0;
               this.broadcast("kill", { targetId: closestSid, killerId: skeleton.id, killerName: "Skeleton", xp: 0 });
+              this.handlePlayerDeath(closestSid, closest);
             }
           }
           return;
@@ -1650,6 +2153,7 @@ export class GameRoom extends Room<GameState> {
                 const damage = defResult.damage;
                 p.hp = Math.max(0, p.hp - damage);
                 this.broadcast("hit", { targetId: sid, damage, x: p.x + TILE_SIZE / 2, y: p.y, attackerId: boss.id });
+                addSkillTries(p, 'shielding', this, sid);
                 // Boss always applies burn
                 if (Math.random() < BOSS_BURN_CHANCE) {
                   applyStatusEffect(p, "burn", BURN_DURATION_MS * 1.5);
@@ -1657,6 +2161,7 @@ export class GameRoom extends Room<GameState> {
                 }
                 if (p.hp <= 0) {
                   this.broadcast("kill", { targetId: sid, killerId: boss.id, killerName: "Dragon", xp: 0 });
+                  this.handlePlayerDeath(sid, p);
                 }
               });
               this.broadcast("boss_aoe", { bossId: boss.id, x: boss.x, y: boss.y, range: BOSS_AOE_RANGE });
@@ -1670,6 +2175,7 @@ export class GameRoom extends Room<GameState> {
               const damage = defResult.damage;
               closest.hp = Math.max(0, closest.hp - damage);
               this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: boss.id });
+              addSkillTries(closest, 'shielding', this, closestSid);
               if (Math.random() < BOSS_BURN_CHANCE) {
                 applyStatusEffect(closest, "burn", BURN_DURATION_MS * 1.5);
                 this.broadcast("status_applied", { sessionId: closestSid, effect: "burn" });
@@ -1677,6 +2183,7 @@ export class GameRoom extends Room<GameState> {
               if (closest.hp <= 0) {
                 boss.targetPlayerId = "";
                 this.broadcast("kill", { targetId: closestSid, killerId: boss.id, killerName: "Dragon", xp: 0 });
+                this.handlePlayerDeath(closestSid, closest);
               }
               }
             }
@@ -1692,6 +2199,277 @@ export class GameRoom extends Room<GameState> {
         }
       });
     }, BOSS_MOVE_INTERVAL_MS);
+
+    // ── Spider Dungeon Spawns ──
+    DUNGEON_SPIDER_SPAWNS.forEach((spawn, i) => {
+      const cfg = SPIDER_CONFIGS[spawn.type];
+      if (!cfg) return;
+      const spider = new SpiderState();
+      spider.id = `spider_${i}`;
+      spider.x = spawn.x * TILE_SIZE;
+      spider.y = spawn.y * TILE_SIZE;
+      spider.spawnX = spider.x;
+      spider.spawnY = spider.y;
+      spider.hp = cfg.hp;
+      spider.maxHp = cfg.hp;
+      spider.spiderType = spawn.type;
+      spider.alive = true;
+      this.state.spiders.set(spider.id, spider);
+    });
+
+    // Spider Queen
+    const queen = new SpiderState();
+    queen.id = "spider_queen";
+    queen.spiderType = "queen";
+    queen.x = SPIDER_QUEEN_X * TILE_SIZE;
+    queen.y = SPIDER_QUEEN_Y * TILE_SIZE;
+    queen.spawnX = queen.x;
+    queen.spawnY = queen.y;
+    queen.hp = SPIDER_QUEEN_HP;
+    queen.maxHp = SPIDER_QUEEN_HP;
+    queen.alive = true;
+    queen.phase = 1;
+    this.state.spiders.set("spider_queen", queen);
+
+    // Spider AI — all spiders chase & attack (aggressive)
+    const spiderLastAttack = new Map<string, number>();
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      this.state.spiders.forEach((spider) => {
+        if (!spider.alive) return;
+        if (spider.spiderType === "queen") return; // queen has separate AI
+        if (spider.frostedUntil > now && Math.random() < 0.5) return;
+
+        const stx = Math.round(spider.x / TILE_SIZE);
+        const sty = Math.round(spider.y / TILE_SIZE);
+        const cfg = SPIDER_CONFIGS[spider.spiderType] || SPIDER_CONFIGS.baby;
+
+        let closest: PlayerState | null = null;
+        let closestSid = "";
+        let closestDist = Infinity;
+        this.state.players.forEach((p, sid) => {
+          if (p.hp <= 0) return;
+          const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - stx), Math.abs(Math.round(p.y / TILE_SIZE) - sty));
+          if (d <= cfg.aggroRange && d < closestDist) {
+            closest = p; closestSid = sid; closestDist = d;
+          }
+        });
+
+        if (!closest && spider.targetPlayerId) {
+          const tracked = this.state.players.get(spider.targetPlayerId);
+          if (tracked && tracked.hp > 0) {
+            const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - stx), Math.abs(Math.round(tracked.y / TILE_SIZE) - sty));
+            if (d <= SPIDER_LEASH) { closest = tracked; closestSid = spider.targetPlayerId; closestDist = d; }
+          }
+        }
+
+        if (!closest) {
+          spider.targetPlayerId = "";
+          // Random wander
+          if (Math.random() > 0.3) return;
+          const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+          const dir = dirs[Math.floor(Math.random() * dirs.length)];
+          const nx = spider.x + dir.dx * TILE_SIZE, ny = spider.y + dir.dy * TILE_SIZE;
+          const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+          if (!canWalk(ntx, nty)) return;
+          spider.x = nx; spider.y = ny;
+          return;
+        }
+
+        spider.targetPlayerId = closestSid;
+
+        if (closestDist <= 1) {
+          if (isProtectionZone(closest.x, closest.y)) return;
+          const last = spiderLastAttack.get(spider.id) || 0;
+          if (now - last >= cfg.attackMs) {
+            spiderLastAttack.set(spider.id, now);
+            const atkVariance = spider.spiderType === "baby" ? 4 : spider.spiderType === "cave" ? 6 : spider.spiderType === "poison" ? 7 : 8;
+            const rawDmg = cfg.atk + Math.floor(Math.random() * atkVariance);
+            const defResult = applyDefense(rawDmg, closest.defense, closest);
+            if (defResult.dodged) {
+              this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: spider.id, dodged: true });
+            } else {
+              const damage = defResult.damage;
+              closest.hp = Math.max(0, closest.hp - damage);
+              this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: spider.id });
+              addSkillTries(closest, 'shielding', this, closestSid);
+
+              // Poison application
+              if (!defResult.dodged) {
+                let poisonChance = 0;
+                if (spider.spiderType === "cave") poisonChance = 0.10;
+                else if (spider.spiderType === "poison") poisonChance = 1.0;
+                else if (spider.spiderType === "elite") poisonChance = 0.15;
+                if (poisonChance > 0 && Math.random() < poisonChance) {
+                  applyStatusEffect(closest, "poison", POISON_DURATION_MS);
+                  this.broadcast("status_applied", { sessionId: closestSid, effect: "poison" });
+                }
+              }
+            }
+            if (closest.hp <= 0) {
+              spider.targetPlayerId = "";
+              this.broadcast("kill", { targetId: closestSid, killerId: spider.id, killerName: `Spider (${spider.spiderType})`, xp: 0 });
+              this.handlePlayerDeath(closestSid, closest);
+            }
+          }
+          return;
+        }
+
+        // Chase via BFS
+        const ptx = Math.round(closest.x / TILE_SIZE), pty = Math.round(closest.y / TILE_SIZE);
+        const step = bfsNextStep(stx, sty, ptx, pty, SPIDER_LEASH);
+        if (step && !this.isTileOccupiedByMonster(step.x * TILE_SIZE, step.y * TILE_SIZE, undefined, undefined, undefined, undefined, spider.id)) {
+          spider.x = step.x * TILE_SIZE; spider.y = step.y * TILE_SIZE;
+        }
+      });
+    }, 450); // Average speed for all spider types — fastest spider (baby) is 400ms
+
+    // Spider Queen AI — separate interval
+    const queenLastAttack = { time: 0 };
+    this.clock.setInterval(() => {
+      const now = Date.now();
+      const queen = this.state.spiders.get("spider_queen");
+      if (!queen || !queen.alive) return;
+      if (queen.frostedUntil > now && Math.random() < 0.25) return;
+
+      const qtx = Math.round(queen.x / TILE_SIZE);
+      const qty = Math.round(queen.y / TILE_SIZE);
+      const isPhase2 = queen.phase >= 2;
+      const aggroRange = SPIDER_QUEEN_AGGRO;
+      const leashRange = SPIDER_QUEEN_LEASH;
+
+      // Hard enrage check
+      let isHardEnraged = false;
+      if (this.spiderQueenFirstAggro > 0 && now - this.spiderQueenFirstAggro >= BOSS_ENRAGE_TIMER) {
+        isHardEnraged = true;
+      }
+
+      let closest: PlayerState | null = null;
+      let closestSid = "";
+      let closestDist = Infinity;
+      this.state.players.forEach((p, sid) => {
+        if (p.hp <= 0) return;
+        const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - qtx), Math.abs(Math.round(p.y / TILE_SIZE) - qty));
+        if (d <= aggroRange && d < closestDist) { closest = p; closestSid = sid; closestDist = d; }
+      });
+
+      if (!closest && queen.targetPlayerId) {
+        const tracked = this.state.players.get(queen.targetPlayerId);
+        if (tracked && tracked.hp > 0) {
+          const d = Math.max(Math.abs(Math.round(tracked.x / TILE_SIZE) - qtx), Math.abs(Math.round(tracked.y / TILE_SIZE) - qty));
+          if (d <= leashRange) { closest = tracked; closestSid = queen.targetPlayerId; closestDist = d; }
+        }
+      }
+
+      if (!closest) {
+        queen.targetPlayerId = "";
+        if (Math.random() > 0.2) return;
+        const dirs = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+        const dir = dirs[Math.floor(Math.random() * dirs.length)];
+        const nx = queen.x + dir.dx * TILE_SIZE, ny = queen.y + dir.dy * TILE_SIZE;
+        const ntx = Math.round(nx / TILE_SIZE), nty = Math.round(ny / TILE_SIZE);
+        if (!canWalk(ntx, nty)) return;
+        queen.x = nx; queen.y = ny;
+        return;
+      }
+
+      queen.targetPlayerId = closestSid;
+      if (this.spiderQueenFirstAggro === 0) {
+        this.spiderQueenFirstAggro = now;
+        this.lastBroodSpawnTime = now;
+        this.lastPoisonWaveTime = now;
+      }
+
+      // Attack if adjacent
+      if (closestDist <= 1) {
+        const atkSpeed = isHardEnraged ? 500 : (isPhase2 ? SPIDER_QUEEN_ENRAGED_SPEED : SPIDER_QUEEN_ATTACK_SPEED);
+        if (now - queenLastAttack.time >= atkSpeed) {
+          queenLastAttack.time = now;
+          const baseAtk = isHardEnraged ? 100 : (isPhase2 ? SPIDER_QUEEN_ENRAGED_ATK : SPIDER_QUEEN_ATK);
+          const rawDmg = baseAtk + Math.floor(Math.random() * 12);
+          const defResult = applyDefense(rawDmg, closest.defense, closest);
+          if (defResult.dodged) {
+            this.broadcast("hit", { targetId: closestSid, damage: 0, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: "spider_queen", dodged: true });
+          } else {
+            const damage = defResult.damage;
+            closest.hp = Math.max(0, closest.hp - damage);
+            this.broadcast("hit", { targetId: closestSid, damage, x: closest.x + TILE_SIZE / 2, y: closest.y, attackerId: "spider_queen" });
+            addSkillTries(closest, 'shielding', this, closestSid);
+          }
+          if (closest.hp <= 0) {
+            queen.targetPlayerId = "";
+            this.broadcast("kill", { targetId: closestSid, killerId: "spider_queen", killerName: "Spider Queen", xp: 0 });
+            this.handlePlayerDeath(closestSid, closest);
+          }
+        }
+      } else {
+        // Chase
+        const ptx = Math.round(closest.x / TILE_SIZE), pty = Math.round(closest.y / TILE_SIZE);
+        const step = bfsNextStep(qtx, qty, ptx, pty, leashRange);
+        if (step) { queen.x = step.x * TILE_SIZE; queen.y = step.y * TILE_SIZE; }
+      }
+
+      // Hard enrage announcement (once)
+      if (isHardEnraged && this.spiderQueenFirstAggro > 0) {
+        const enrageTime = this.spiderQueenFirstAggro + BOSS_ENRAGE_TIMER;
+        if (now >= enrageTime && now < enrageTime + 1000) {
+          this.broadcast("chat_message", { message: "🕷️ The Spider Queen enters a frenzy!" });
+        }
+      }
+
+      // Brood spawn
+      const broodInterval = isPhase2 ? BROOD_SPAWN_INTERVAL_P2 : BROOD_SPAWN_INTERVAL_P1;
+      if (now - this.lastBroodSpawnTime >= broodInterval) {
+        this.lastBroodSpawnTime = now;
+        // Count active brood
+        let broodCount = 0;
+        this.state.spiders.forEach(sp => { if (sp.isBrood && sp.alive) broodCount++; });
+        const spawnCount = isPhase2 ? 3 : 2;
+        for (let i = 0; i < spawnCount && broodCount < MAX_BROOD_SPIDERS; i++) {
+          const bId = `spider_brood_${this.broodCounter++}`;
+          const brood = new SpiderState();
+          brood.id = bId;
+          brood.spiderType = "baby";
+          brood.isBrood = true;
+          // Random position within 3 tiles of queen
+          const offX = Math.floor(Math.random() * 7) - 3;
+          const offY = Math.floor(Math.random() * 7) - 3;
+          const bx = qtx + offX, by = qty + offY;
+          if (canWalk(bx, by)) {
+            brood.x = bx * TILE_SIZE; brood.y = by * TILE_SIZE;
+          } else {
+            brood.x = queen.x; brood.y = queen.y;
+          }
+          brood.spawnX = brood.x; brood.spawnY = brood.y;
+          brood.hp = SPIDER_CONFIGS.baby.hp;
+          brood.maxHp = SPIDER_CONFIGS.baby.hp;
+          brood.alive = true;
+          this.state.spiders.set(bId, brood);
+          broodCount++;
+        }
+      }
+
+      // Phase 2: Poison Wave
+      if (isPhase2 && now - this.lastPoisonWaveTime >= POISON_WAVE_INTERVAL) {
+        this.lastPoisonWaveTime = now;
+        // Telegraph 1.5s before
+        this.broadcast("spider_queen_telegraph", { x: queen.x, y: queen.y, message: "The Spider Queen rears back..." });
+        this.clock.setTimeout(() => {
+          if (!queen.alive) return;
+          this.broadcast("spider_queen_poison_wave", { x: queen.x, y: queen.y, range: POISON_WAVE_RANGE });
+          this.broadcast("chat_message", { message: "🕷️ The Spider Queen releases a wave of venom!" });
+          // Hit all nearby players
+          this.state.players.forEach((p, sid) => {
+            if (p.hp <= 0) return;
+            const d = Math.max(Math.abs(Math.round(p.x / TILE_SIZE) - Math.round(queen.x / TILE_SIZE)), Math.abs(Math.round(p.y / TILE_SIZE) - Math.round(queen.y / TILE_SIZE)));
+            if (d <= POISON_WAVE_RANGE) {
+              applyStatusEffect(p, "poison", 16000); // Enhanced poison: 16s duration (8 dmg/tick is handled by existing DOT)
+              this.broadcast("status_applied", { sessionId: sid, effect: "poison" });
+            }
+          });
+        }, 1500);
+      }
+    }, 700); // Queen AI tick
 
     // ── World Events System ──
     const scheduleNextWorldEvent = () => {
@@ -1871,9 +2649,11 @@ export class GameRoom extends Room<GameState> {
           player.hp = Math.max(0, player.hp - dotDmg);
           this.broadcast("status_tick", { sessionId: sid, effect: player.statusEffect, damage: dotDmg });
           if (player.hp <= 0) {
+            const deathCause = player.statusEffect;
             player.statusEffect = "";
             player.statusEffectEnd = 0;
-            this.broadcast("kill", { targetId: sid, killerId: player.statusEffect === "poison" ? "poison" : "burn", killerName: player.statusEffect === "poison" ? "Poison" : "Fire", xp: 0 });
+            this.broadcast("kill", { targetId: sid, killerId: deathCause === "poison" ? "poison" : "burn", killerName: deathCause === "poison" ? "Poison" : "Fire", xp: 0 });
+            this.handlePlayerDeath(sid, player);
           }
         }
       });
@@ -1945,6 +2725,9 @@ export class GameRoom extends Room<GameState> {
       this.state.bosses.forEach((boss) => {
         if (boss.alive && boss.x === newX && boss.y === newY) monsterBlocking = true;
       });
+      this.state.spiders.forEach((spider) => {
+        if (spider.alive && spider.x === newX && spider.y === newY) monsterBlocking = true;
+      });
       if (monsterBlocking) {
         lastMoveTime.set(client.sessionId, now);
         return;
@@ -1979,7 +2762,8 @@ export class GameRoom extends Room<GameState> {
         const boss = this.state.bosses.get(tid);
         const targetPlayer = this.state.players.get(tid);
         const worldEvent = this.state.worldEvents.get(tid);
-        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (boss && boss.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId) || (worldEvent && worldEvent.active && worldEvent.eventType === "golden_slime" && worldEvent.hp > 0);
+        const spider = this.state.spiders.get(tid);
+        const valid = (slime && slime.alive) || (wolf && wolf.alive) || (goblin && goblin.alive) || (skeleton && skeleton.alive) || (boss && boss.alive) || (spider && spider.alive) || (targetPlayer && targetPlayer.hp > 0 && tid !== client.sessionId) || (worldEvent && worldEvent.active && worldEvent.eventType === "golden_slime" && worldEvent.hp > 0);
         if (!valid) {
           player.targetId = "";
           return;
@@ -2059,6 +2843,51 @@ export class GameRoom extends Room<GameState> {
           })),
         });
       }
+
+      // Cragbeard special dungeon dialog
+      if (npc.id === "cragbeard") {
+        client.send("dungeon_prompt", {
+          npcId: "cragbeard",
+          dungeonName: "Spider Queen's Lair",
+          description: "Deep beneath the caves lies the Spider Queen...",
+          recommendedLevel: 10,
+          recommendedParty: "2+",
+          playerLevel: player.level,
+          minLevel: 5,
+        });
+      }
+    });
+
+    // ── Dungeon Enter ──
+    this.onMessage("dungeon_enter", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      if (player.level < 5) {
+        client.send("chat_message", { message: "You must be at least level 5 to enter the dungeon." });
+        return;
+      }
+      player.x = DUNGEON_ENTRY_X * TILE_SIZE;
+      player.y = DUNGEON_ENTRY_Y * TILE_SIZE;
+      player.targetId = "";
+      client.send("dungeon_entered", { dungeonName: "Spider Queen's Lair" });
+    });
+
+    // ── Dungeon Exit (check on move — tile stepping) ──
+    this.onMessage("try_dungeon_exit", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player || player.hp <= 0) return;
+      const tx = Math.round(player.x / TILE_SIZE);
+      const ty = Math.round(player.y / TILE_SIZE);
+      if (WORLD_MAP[ty]?.[tx] !== TILE.CAVE_EXIT) return;
+
+      if (this.spiderQueenAlive) {
+        client.send("chat_message", { message: "The webs block your escape... Defeat the Spider Queen to leave!" });
+      } else {
+        player.x = CRAGBEARD_X * TILE_SIZE;
+        player.y = (CRAGBEARD_Y + 1) * TILE_SIZE;
+        player.targetId = "";
+        client.send("dungeon_exited", {});
+      }
     });
 
     // ── Quest Accept ──
@@ -2120,6 +2949,34 @@ export class GameRoom extends Room<GameState> {
         }
       }
       if (!questSlot) return;
+
+      // Check inventory space for item rewards before granting anything
+      if (questDef.rewards.items && questDef.rewards.items.length > 0) {
+        // Count how many free slots the player has
+        let freeSlots = INVENTORY_SIZE - player.inventory.length;
+        // Also check if existing stacks can absorb the reward items
+        let needsNewSlots = 0;
+        for (const ri of questDef.rewards.items) {
+          let remaining = ri.quantity;
+          const itemDef = ITEMS[ri.itemId];
+          if (!itemDef) continue;
+          // Check existing stacks
+          for (let i = 0; i < player.inventory.length; i++) {
+            const slot = player.inventory.at(i);
+            if (!slot || slot.itemId !== ri.itemId) continue;
+            const canAdd = itemDef.maxStack - slot.quantity;
+            remaining -= canAdd;
+            if (remaining <= 0) break;
+          }
+          if (remaining > 0) {
+            needsNewSlots += Math.ceil(remaining / itemDef.maxStack);
+          }
+        }
+        if (needsNewSlots > freeSlots) {
+          client.send("quest_error", { message: "Inventory full! Make space before turning in." });
+          return;
+        }
+      }
 
       // Grant rewards
       player.xp += questDef.rewards.xp;
@@ -2408,7 +3265,10 @@ export class GameRoom extends Room<GameState> {
     this.onMessage("request_respawn", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || player.hp > 0) return; // only if dead
-      if (player.isHardcore) return; // hardcore characters can't respawn
+      if (player.isHardcore) {
+        // Character already deleted at death time by handlePlayerDeath
+        return;
+      }
       this.respawnPlayer(player);
     });
 
@@ -2418,9 +3278,11 @@ export class GameRoom extends Room<GameState> {
       if (player.mp < HEAL_COST) return;
       if (player.hp >= player.maxHp) return;
       player.mp -= HEAL_COST;
-      const healed = Math.min(HEAL_AMOUNT, player.maxHp - player.hp);
+      const healBase = HEAL_AMOUNT + Math.floor(player.magicSkill * 0.3);
+      const healed = Math.min(healBase, player.maxHp - player.hp);
       player.hp += healed;
       this.broadcast("heal_effect", { sessionId: client.sessionId, amount: healed });
+      addSkillTries(player, 'magic', this, client.sessionId);
     });
 
     // ── Use Potion ──
@@ -2440,9 +3302,12 @@ export class GameRoom extends Room<GameState> {
       potionCooldowns.set(client.sessionId, now);
 
       // Don't waste potions at full (only block if ALL effects are maxed)
+      // Venom sac: also usable if poisoned (even at full HP)
       const hpFull = !item.effect?.hp || player.hp >= player.maxHp;
       const mpFull = !item.effect?.mp || player.mp >= player.maxMp;
-      if (hpFull && mpFull) return;
+      const isVenomSac = itemId === "venom_sac";
+      const isPoisoned = player.statusEffect === "poison";
+      if (hpFull && mpFull && !(isVenomSac && isPoisoned)) return;
 
       removeFromInventory(player, itemId, 1);
 
@@ -2455,6 +3320,12 @@ export class GameRoom extends Room<GameState> {
         const restored = Math.min(item.effect.mp, player.maxMp - player.mp);
         player.mp += restored;
         this.broadcast("mana_effect", { sessionId: client.sessionId, amount: restored });
+      }
+      // Venom sac cures poison
+      if (isVenomSac && player.statusEffect === "poison") {
+        player.statusEffect = "";
+        player.statusEffectEnd = 0;
+        this.broadcast("status_cleared", { sessionId: client.sessionId, effect: "poison" });
       }
     });
 
@@ -2519,6 +3390,7 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, slime.x, slime.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         slime.hp = Math.max(0, slime.hp - damage);
         slime.targetPlayerId = client.sessionId;
@@ -2544,16 +3416,18 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, wolf.x, wolf.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         wolf.hp = Math.max(0, wolf.hp - damage);
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: wolf.x + TILE_SIZE / 2, toY: wolf.y });
         this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (wolf.hp <= 0) {
+          const wolfId = player.targetId;
           wolf.alive = false; wolf.targetPlayerId = ""; player.targetId = "";
           player.xp += WOLF_XP;
           this.spawnGroundLoot(wolf.x, wolf.y, "wolf", client.sessionId, randRange(WOLF_GOLD_MIN, WOLF_GOLD_MAX));
           this.checkLevelUp(player, client.sessionId);
-          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
+          this.broadcastKillAndQuest( { targetId: wolfId, killerId: client.sessionId, killerName: player.name, xp: WOLF_XP });
           this.clock.setTimeout(() => { wolf.x = wolf.spawnX; wolf.y = wolf.spawnY; wolf.hp = WOLF_HP; wolf.maxHp = WOLF_HP; wolf.targetPlayerId = ""; wolf.alive = true; }, WOLF_RESPAWN_MS);
         }
         return;
@@ -2565,17 +3439,19 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, goblinT.x, goblinT.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         goblinT.hp = Math.max(0, goblinT.hp - damage);
         goblinT.targetPlayerId = client.sessionId;
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: goblinT.x + TILE_SIZE / 2, toY: goblinT.y });
         this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (goblinT.hp <= 0) {
+          const gTargetId = player.targetId;
           goblinT.alive = false; goblinT.targetPlayerId = ""; player.targetId = "";
           player.xp += GOBLIN_XP;
           this.spawnGroundLoot(goblinT.x, goblinT.y, "goblin", client.sessionId, randRange(GOBLIN_GOLD_MIN, GOBLIN_GOLD_MAX));
           checkLevelUp(player, this, client.sessionId);
-          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
+          this.broadcastKillAndQuest( { targetId: gTargetId, killerId: client.sessionId, killerName: player.name, xp: GOBLIN_XP });
           this.clock.setTimeout(() => { goblinT.x = goblinT.spawnX; goblinT.y = goblinT.spawnY; goblinT.hp = GOBLIN_HP; goblinT.maxHp = GOBLIN_HP; goblinT.targetPlayerId = ""; goblinT.alive = true; }, GOBLIN_RESPAWN_MS);
         }
         return;
@@ -2587,17 +3463,19 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, skelT.x, skelT.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         skelT.hp = Math.max(0, skelT.hp - damage);
         skelT.targetPlayerId = client.sessionId;
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: skelT.x + TILE_SIZE / 2, toY: skelT.y });
         this.broadcast("hit", { targetId: player.targetId, damage, attackerId: client.sessionId, isCrit });
         if (skelT.hp <= 0) {
+          const sTargetId = player.targetId;
           skelT.alive = false; skelT.targetPlayerId = ""; player.targetId = "";
           player.xp += SKELETON_XP;
           this.spawnGroundLoot(skelT.x, skelT.y, "skeleton", client.sessionId, randRange(SKELETON_GOLD_MIN, SKELETON_GOLD_MAX));
           checkLevelUp(player, this, client.sessionId);
-          this.broadcastKillAndQuest( { targetId: player.targetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
+          this.broadcastKillAndQuest( { targetId: sTargetId, killerId: client.sessionId, killerName: player.name, xp: SKELETON_XP });
           this.clock.setTimeout(() => { skelT.x = skelT.spawnX; skelT.y = skelT.spawnY; skelT.hp = SKELETON_HP; skelT.maxHp = SKELETON_HP; skelT.targetPlayerId = ""; skelT.alive = true; }, SKELETON_RESPAWN_MS);
         }
         return;
@@ -2610,11 +3488,12 @@ export class GameRoom extends Room<GameState> {
         const d = dist(px, py, target.x, target.y);
         if (d > cfg.range) return;
         player.mp -= POWER_SHOT_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         const { damage, isCrit } = calcPlayerDamage(player, 1.5);
         target.hp = Math.max(0, target.hp - damage);
         this.broadcast("projectile", { fromX: px + TILE_SIZE / 2, fromY: py, toX: target.x + TILE_SIZE / 2, toY: target.y });
         this.broadcast("pvp_hit", { targetId: player.targetId, attackerName: player.name, damage, isCrit });
-        if (target.hp <= 0) { player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
+        if (target.hp <= 0) { const tSid = player.targetId; player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.handlePlayerDeath(tSid, target); }
       }
     });
 
@@ -2625,6 +3504,7 @@ export class GameRoom extends Room<GameState> {
       if (player.playerClass !== "warrior" && player.playerClass !== "rogue") return;
       if (player.mp < CLEAVE_COST) return;
       player.mp -= CLEAVE_COST;
+      addSkillTries(player, 'magic', this, client.sessionId);
 
       const cfg = CLASS_CONFIG.warrior;
       const px = player.x, py = player.y;
@@ -2721,7 +3601,7 @@ export class GameRoom extends Room<GameState> {
         target.hp = Math.max(0, target.hp - damage);
         this.broadcast("pvp_hit", { targetId: sid, attackerName: player.name, damage, isCrit });
         hitCount++;
-        if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); }
+        if (target.hp <= 0) { if (player.targetId === sid) player.targetId = ""; const xpGain = 50 + target.level * 10; player.xp += xpGain; this.broadcast("pvp_kill", { killerName: player.name, targetName: target.name, xp: xpGain }); this.handlePlayerDeath(sid, target); }
       });
 
       // Check for level up
@@ -2743,6 +3623,7 @@ export class GameRoom extends Room<GameState> {
       if (player.buffShieldWallEnd > now) return;
 
       player.mp -= SHIELD_WALL_COST;
+      addSkillTries(player, 'magic', this, client.sessionId);
       player.buffShieldWallEnd = now + SHIELD_WALL_DURATION_MS;
       setAbilityCooldown(client.sessionId, "shield_wall", now + SHIELD_WALL_COOLDOWN_MS);
 
@@ -2759,6 +3640,7 @@ export class GameRoom extends Room<GameState> {
       if (getAbilityCooldown(client.sessionId, "war_cry") > now) return;
 
       player.mp -= WAR_CRY_COST;
+      addSkillTries(player, 'magic', this, client.sessionId);
       setAbilityCooldown(client.sessionId, "war_cry", now + WAR_CRY_COOLDOWN_MS);
 
       // Apply buff to caster
@@ -2812,6 +3694,7 @@ export class GameRoom extends Room<GameState> {
         if (d > cfg.range) return false;
         
         player.mp -= FROST_ARROW_COST;
+        addSkillTries(player, 'magic', this, client.sessionId);
         setAbilityCooldown(client.sessionId, "frost_arrow", now + FROST_ARROW_COOLDOWN_MS);
         
         const frostResult = calcPlayerDamage(player, FROST_ARROW_DAMAGE_MULT);
@@ -2955,6 +3838,7 @@ export class GameRoom extends Room<GameState> {
       if (dist(px, py, centerX, centerY) > cfg.range) return;
 
       player.mp -= RAIN_OF_ARROWS_COST;
+      addSkillTries(player, 'magic', this, client.sessionId);
       setAbilityCooldown(client.sessionId, "rain_of_arrows", now + RAIN_OF_ARROWS_COOLDOWN_MS);
 
       const centerTX = Math.round(centerX / TILE_SIZE);
@@ -3063,55 +3947,23 @@ export class GameRoom extends Room<GameState> {
       client.send("cooldowns", cds);
     });
 
+    // ── Periodic autosave (every 60s) ──
+    this.clock.setInterval(() => {
+      this.saveAllPlayers();
+    }, AUTOSAVE_INTERVAL_MS);
+
     console.log(`GameRoom created with ${SLIME_SPAWNS.length} slime spawns`);
   }
 
-  onJoin(client: Client, options: { name?: string; playerClass?: string; savedXp?: number; isHardcore?: boolean; savedGold?: number; savedInventory?: Array<{itemId: string; quantity: number}>; savedEquipment?: Record<string, string> }) {
+  onJoin(client: Client, options?: any, auth?: { userId: number; characterId: number; charData: CharacterRow }) {
+    if (!auth) throw new Error("Auth required");
+    // Store auth data for save operations
+    this.authData.set(client.sessionId, { userId: auth.userId, characterId: auth.characterId });
+
     const player = new PlayerState();
-    const validClasses = ["warrior", "ranger", "mage", "rogue"];
-    const cls = validClasses.includes(options.playerClass || "") ? options.playerClass! : "warrior";
-    const cfg = CLASS_CONFIG[cls];
-    player.isHardcore = !!options.isHardcore;
 
-    // Restore saved progress
-    const xp = Math.max(0, Math.min(options.savedXp || 0, 1000000)); // cap XP
-    const level = levelFromXp(xp);
-
-    player.x = SPAWN_TILE_X * TILE_SIZE;
-    player.y = SPAWN_TILE_Y * TILE_SIZE;
-    player.color = COLORS[Math.floor(Math.random() * COLORS.length)];
-    player.name = options.name || "Anonymous";
-    player.direction = "down";
-    player.moving = false;
-    player.playerClass = cls;
-    player.xp = xp;
-    player.level = level;
-    player.targetId = "";
-    player.gold = Math.max(0, Math.min(options.savedGold || 0, 10000000));
-
-    // Restore inventory
-    if (options.savedInventory && Array.isArray(options.savedInventory)) {
-      for (const slot of options.savedInventory) {
-        if (slot.itemId && ITEMS[slot.itemId] && slot.quantity > 0) {
-          addToInventory(player, slot.itemId, Math.min(slot.quantity, ITEMS[slot.itemId].maxStack));
-        }
-      }
-    }
-
-    // Restore equipment
-    if (options.savedEquipment) {
-      const eq = options.savedEquipment;
-      if (eq.weapon && ITEMS[eq.weapon]?.equipSlot === "weapon") player.equipWeapon = eq.weapon;
-      if (eq.helmet && ITEMS[eq.helmet]?.equipSlot === "helmet") player.equipHelmet = eq.helmet;
-      if (eq.chest && ITEMS[eq.chest]?.equipSlot === "chest") player.equipChest = eq.chest;
-      if (eq.legs && ITEMS[eq.legs]?.equipSlot === "legs") player.equipLegs = eq.legs;
-      if (eq.boots && ITEMS[eq.boots]?.equipSlot === "boots") player.equipBoots = eq.boots;
-    }
-
-    // Calculate stats with equipment bonuses
-    recalcEquipBonuses(player);
-    player.hp = player.maxHp;
-    player.mp = player.maxMp;
+    // Hydrate from DB
+    this.hydratePlayer(player, auth.charData);
 
     this.state.players.set(client.sessionId, player);
     lastMoveTime.set(client.sessionId, 0);
@@ -3121,18 +3973,34 @@ export class GameRoom extends Room<GameState> {
     client.send("world_data", { map: WORLD_MAP, npcs: NPCS, mapW: MAP_W, mapH: MAP_H });
     // Send initial quest markers
     this.sendQuestMarkers(client, player);
-    console.log(`${player.name} (${cls}) joined (${client.sessionId})`);
+    console.log(`${player.name} (${player.playerClass}) joined [user=${auth.userId}, char=${auth.characterId}] (${client.sessionId})`);
   }
 
   onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
-    if (player) console.log(`${player.name} left (${client.sessionId})`);
+    const auth = this.authData.get(client.sessionId);
+
+    // Save to DB on leave (by character ID)
+    if (player && auth) {
+      try {
+        saveCharacter(auth.characterId, this.serializePlayer(player));
+        console.log(`${player.name} saved & left (${client.sessionId})`);
+      } catch (err) {
+        console.error(`Error saving ${player.name} on leave:`, err);
+      }
+    }
+
     this.state.players.delete(client.sessionId);
+    this.authData.delete(client.sessionId);
     lastMoveTime.delete(client.sessionId);
     lastAutoAttackTime.delete(client.sessionId);
     npcDialogueIndex.delete(client.sessionId);
     abilityCooldowns.delete(client.sessionId);
   }
 
-  onDispose() { console.log("GameRoom disposed"); }
+  onDispose() {
+    // Save all remaining players before room is disposed
+    this.saveAllPlayers();
+    console.log("GameRoom disposed (all players saved)");
+  }
 }

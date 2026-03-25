@@ -42,4 +42,16 @@ export class PlayerState extends Schema {
   // Quest system
   @type([QuestSlot]) quests = new ArraySchema<QuestSlot>();
   completedQuestIds: Set<string> = new Set(); // not synced via schema, tracked server-side
+
+  // Use-based skills (synced to client)
+  @type("number") meleeSkill: number = 1;
+  @type("number") rangedSkill: number = 1;
+  @type("number") magicSkill: number = 1;
+  @type("number") shieldingSkill: number = 1;
+
+  // Skill tries (server-only, NOT synced)
+  meleeTries: number = 0;
+  rangedTries: number = 0;
+  magicTries: number = 0;
+  shieldingTries: number = 0;
 }

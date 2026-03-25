@@ -1,90 +1,124 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 interface Props {
-  onPlay: (name: string, playerClass: string, isHardcore: boolean) => void;
+  onLogin: (token: string) => void;
 }
 
-interface SavedCharacter {
-  name: string;
-  playerClass: string;
-  level: number;
-  xp: number;
-  savedAt: number;
-  isHardcore?: boolean;
-}
+const API_BASE = `${window.location.protocol}//${window.location.host}`;
 
-function getSavedCharacter(): SavedCharacter | null {
-  try {
-    const raw = localStorage.getItem("mmo_character");
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
-}
+type Mode = "login" | "register" | "forgot" | "reset";
 
-export default function LoginScreen({ onPlay }: Props) {
-  const [saved, setSaved] = useState<SavedCharacter | null>(null);
-  const [name, setName] = useState("");
-  const [playerClass, setPlayerClass] = useState<"warrior" | "ranger" | "mage" | "rogue">("warrior");
-  const [showNew, setShowNew] = useState(false);
-  const [isHardcore, setIsHardcore] = useState(false);
+export default function LoginScreen({ onLogin }: Props) {
+  const [mode, setMode] = useState<Mode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const s = getSavedCharacter();
-    if (s) {
-      setSaved(s);
-      setName(s.name);
-      setPlayerClass(s.playerClass as "warrior" | "ranger" | "mage" | "rogue");
-    } else {
-      setShowNew(true);
+  const handleLogin = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Login failed");
+        return;
+      }
+      onLogin(data.token);
+    } catch {
+      setError("Connection failed");
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  };
+
+  const handleRegister = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Registration failed");
+        return;
+      }
+      onLogin(data.token);
+    } catch {
+      setError("Connection failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError("");
+    setSuccess("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed");
+        return;
+      }
+      setSuccess("If that email exists, a reset code has been generated. Check the server console.");
+      setMode("reset");
+    } catch {
+      setError("Connection failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    setError("");
+    setSuccess("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), token: resetCode.trim(), newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Reset failed");
+        return;
+      }
+      setSuccess("Password updated! You can now log in.");
+      setMode("login");
+      setPassword("");
+      setResetCode("");
+      setNewPassword("");
+    } catch {
+      setError("Connection failed");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = name.trim();
-    if (trimmed) onPlay(trimmed, playerClass, isHardcore);
-  };
-
-  const handleContinue = () => {
-    if (saved) onPlay(saved.name, saved.playerClass, saved.isHardcore || false);
-  };
-
-  const handleNewCharacter = () => {
-    setShowNew(true);
-    setSaved(null);
-    setName("");
-    setPlayerClass("warrior");
-  };
-
-  const classInfo: Record<string, { icon: string; name: string; desc: string; stats: string; color: string }> = {
-    warrior: {
-      icon: "⚔️",
-      name: "Warrior",
-      desc: "Tank. High HP & Defense. Absorbs damage.",
-      stats: "HP: 130 | ATK: 22 | DEF: 8 | SPD: 1.1s",
-      color: "#e74c3c",
-    },
-    ranger: {
-      icon: "🏹",
-      name: "Ranger",
-      desc: "Ranged DPS. Strikes from distance. Good crits.",
-      stats: "HP: 85 | ATK: 20 | Range: 4 | Crit: 8%",
-      color: "#2ecc71",
-    },
-    mage: {
-      icon: "🔮",
-      name: "Mage",
-      desc: "Spell Caster. Huge MP pool. Devastating abilities.",
-      stats: "HP: 70 | ATK: 10 | MP: 100 | Regen: 8/5s",
-      color: "#9b59b6",
-    },
-    rogue: {
-      icon: "🗡️",
-      name: "Rogue",
-      desc: "Melee DPS. Fast attacks. High crit & dodge.",
-      stats: "HP: 80 | ATK: 18 | Crit: 10% | Dodge: 8%",
-      color: "#f39c12",
-    },
+    if (mode === "login") handleLogin();
+    else if (mode === "register") handleRegister();
+    else if (mode === "forgot") handleForgotPassword();
+    else if (mode === "reset") handleResetPassword();
   };
 
   return (
@@ -99,176 +133,160 @@ export default function LoginScreen({ onPlay }: Props) {
         background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
         color: "#fff",
         padding: 20,
+        overflowY: "auto",
       }}
     >
       <h1 style={{ fontSize: 48, marginBottom: 8, letterSpacing: 2 }}>🌍 MMO World</h1>
       <p style={{ color: "#aaa", marginBottom: 24, fontSize: 16 }}>
-        Choose your class and enter the world
+        {mode === "login" && "Welcome back, adventurer"}
+        {mode === "register" && "Create your account"}
+        {mode === "forgot" && "Reset your password"}
+        {mode === "reset" && "Enter your reset code"}
       </p>
 
-      {/* Continue saved character */}
-      {saved && !showNew && (
-        <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div style={{
-            padding: 24,
-            borderRadius: 12,
-            border: `3px solid ${classInfo[saved.playerClass as keyof typeof classInfo]?.color || "#fff"}`,
-            background: "rgba(255,255,255,0.08)",
-            marginBottom: 16,
-            minWidth: 280,
-          }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>
-              {classInfo[saved.playerClass as keyof typeof classInfo]?.icon || "⚔️"}
-            </div>
-            <div style={{ fontSize: 22, fontWeight: "bold", marginBottom: 4 }}>{saved.name}</div>
-            <div style={{ fontSize: 14, color: "#aaa", marginBottom: 4 }}>
-              {classInfo[saved.playerClass as keyof typeof classInfo]?.name || saved.playerClass} — Level {saved.level}
-              {saved.isHardcore && <span style={{ color: "#ff4444", marginLeft: 8 }}>☠️ HC</span>}
-            </div>
-            <div style={{ fontSize: 12, color: "#888", fontFamily: "monospace" }}>
-              XP: {saved.xp}
-            </div>
-          </div>
+      {/* Mode toggle (login / register) */}
+      {(mode === "login" || mode === "register") && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
           <button
-            onClick={handleContinue}
+            onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
             style={{
-              padding: "14px 48px",
-              fontSize: 20,
-              borderRadius: 8,
-              border: "none",
-              background: classInfo[saved.playerClass as keyof typeof classInfo]?.color || "#3498db",
-              color: "#fff",
-              cursor: "pointer",
-              fontWeight: "bold",
-              marginBottom: 12,
-              display: "block",
-              width: "100%",
+              padding: "10px 28px", fontSize: 16, borderRadius: "8px 0 0 8px",
+              border: "2px solid rgba(255,255,255,0.2)",
+              background: mode === "login" ? "rgba(255,255,255,0.15)" : "transparent",
+              color: mode === "login" ? "#fff" : "#888",
+              cursor: "pointer", fontWeight: mode === "login" ? "bold" : "normal",
             }}
           >
-            Continue
+            Login
           </button>
           <button
-            onClick={handleNewCharacter}
+            onClick={() => { setMode("register"); setError(""); setSuccess(""); }}
             style={{
-              padding: "10px 32px",
-              fontSize: 14,
-              borderRadius: 8,
-              border: "1px solid rgba(255,255,255,0.2)",
-              background: "transparent",
-              color: "#aaa",
-              cursor: "pointer",
-              width: "100%",
+              padding: "10px 28px", fontSize: 16, borderRadius: "0 8px 8px 0",
+              border: "2px solid rgba(255,255,255,0.2)",
+              background: mode === "register" ? "rgba(255,255,255,0.15)" : "transparent",
+              color: mode === "register" ? "#fff" : "#888",
+              cursor: "pointer", fontWeight: mode === "register" ? "bold" : "normal",
             }}
           >
-            New Character
+            Register
           </button>
         </div>
       )}
 
-      {/* New character creation */}
-      {(showNew || !saved) && (
-        <>
-          {/* Class selection */}
-          <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap", justifyContent: "center" }}>
-            {(["warrior", "ranger", "mage", "rogue"] as const).map((cls) => {
-              const info = classInfo[cls];
-              const selected = playerClass === cls;
-              return (
-                <div
-                  key={cls}
-                  onClick={() => setPlayerClass(cls)}
-                  style={{
-                    width: 180,
-                    padding: 16,
-                    borderRadius: 12,
-                    border: `3px solid ${selected ? info.color : "rgba(255,255,255,0.15)"}`,
-                    background: selected ? `${info.color}22` : "rgba(255,255,255,0.05)",
-                    cursor: "pointer",
-                    transition: "all 0.2s",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: 36, marginBottom: 8 }}>{info.icon}</div>
-                  <div style={{ fontSize: 18, fontWeight: "bold", marginBottom: 6, color: selected ? info.color : "#fff" }}>
-                    {info.name}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8, lineHeight: 1.4 }}>{info.desc}</div>
-                  <div style={{ fontSize: 11, color: "#888", fontFamily: "monospace" }}>{info.stats}</div>
-                </div>
-              );
-            })}
-          </div>
+      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", width: 320 }}>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          autoFocus
+          style={{
+            padding: "12px 20px", fontSize: 18, borderRadius: 8,
+            border: "2px solid rgba(255,255,255,0.2)",
+            background: "rgba(255,255,255,0.1)", color: "#fff",
+            outline: "none", width: "100%",
+          }}
+        />
 
-          {/* Game mode toggle */}
-          <div
-            onClick={() => setIsHardcore(!isHardcore)}
+        {(mode === "login" || mode === "register") && (
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
             style={{
-              display: "flex", alignItems: "center", gap: 10, marginBottom: 20,
-              cursor: "pointer", userSelect: "none",
-              padding: "8px 16px", borderRadius: 8,
-              border: `2px solid ${isHardcore ? "#ff4444" : "rgba(255,255,255,0.15)"}`,
-              background: isHardcore ? "rgba(255,68,68,0.15)" : "rgba(255,255,255,0.05)",
-              transition: "all 0.2s",
+              padding: "12px 20px", fontSize: 18, borderRadius: 8,
+              border: "2px solid rgba(255,255,255,0.2)",
+              background: "rgba(255,255,255,0.1)", color: "#fff",
+              outline: "none", width: "100%",
             }}
-          >
-            <div style={{
-              width: 20, height: 20, borderRadius: 4,
-              border: `2px solid ${isHardcore ? "#ff4444" : "#666"}`,
-              background: isHardcore ? "#ff4444" : "transparent",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 14, color: "#fff",
-            }}>
-              {isHardcore ? "✓" : ""}
-            </div>
-            <div>
-              <span style={{ fontWeight: "bold", color: isHardcore ? "#ff4444" : "#fff" }}>
-                ☠️ Hardcore Mode
-              </span>
-              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-                Death is permanent. Character deleted on death.
-              </div>
-            </div>
-          </div>
+          />
+        )}
 
-          <form onSubmit={handleSubmit} style={{ display: "flex", gap: 12 }}>
+        {mode === "reset" && (
+          <>
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name..."
-              maxLength={20}
-              autoFocus
+              value={resetCode}
+              onChange={(e) => setResetCode(e.target.value)}
+              placeholder="6-digit reset code"
+              maxLength={6}
               style={{
-                padding: "12px 20px",
-                fontSize: 18,
-                borderRadius: 8,
-                border: `2px solid ${classInfo[playerClass].color}`,
-                background: "rgba(255,255,255,0.1)",
-                color: "#fff",
-                outline: "none",
-                width: 220,
+                padding: "12px 20px", fontSize: 18, borderRadius: 8,
+                border: "2px solid rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,0.1)", color: "#fff",
+                outline: "none", width: "100%", textAlign: "center",
+                letterSpacing: 8,
               }}
             />
-            <button
-              type="submit"
-              disabled={!name.trim()}
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New Password"
               style={{
-                padding: "12px 32px",
-                fontSize: 18,
-                borderRadius: 8,
-                border: "none",
-                background: name.trim() ? classInfo[playerClass].color : "#555",
-                color: "#fff",
-                cursor: name.trim() ? "pointer" : "default",
-                fontWeight: "bold",
-                transition: "background 0.2s",
+                padding: "12px 20px", fontSize: 18, borderRadius: 8,
+                border: "2px solid rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,0.1)", color: "#fff",
+                outline: "none", width: "100%",
               }}
-            >
-              Play
-            </button>
-          </form>
-        </>
-      )}
+            />
+          </>
+        )}
+
+        {error && <div style={{ color: "#e74c3c", fontSize: 14, textAlign: "center" }}>{error}</div>}
+        {success && <div style={{ color: "#2ecc71", fontSize: 14, textAlign: "center" }}>{success}</div>}
+
+        <button
+          type="submit"
+          disabled={loading || !email.trim() || (mode === "login" && !password) || (mode === "register" && !password) || (mode === "reset" && (!resetCode || !newPassword))}
+          style={{
+            padding: "14px 32px", fontSize: 18, borderRadius: 8,
+            border: "none", width: "100%",
+            background: loading ? "#555" : "#3498db",
+            color: "#fff", cursor: loading ? "default" : "pointer",
+            fontWeight: "bold", transition: "background 0.2s",
+          }}
+        >
+          {loading ? "..." :
+            mode === "login" ? "Login" :
+            mode === "register" ? "Create Account" :
+            mode === "forgot" ? "Send Reset Code" :
+            "Reset Password"
+          }
+        </button>
+
+        {/* Forgot password link */}
+        {mode === "login" && (
+          <button
+            type="button"
+            onClick={() => { setMode("forgot"); setError(""); setSuccess(""); }}
+            style={{
+              background: "none", border: "none", color: "#888",
+              cursor: "pointer", fontSize: 13, textDecoration: "underline",
+              marginTop: 4,
+            }}
+          >
+            Forgot password?
+          </button>
+        )}
+
+        {/* Back to login from forgot/reset */}
+        {(mode === "forgot" || mode === "reset") && (
+          <button
+            type="button"
+            onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
+            style={{
+              background: "none", border: "none", color: "#888",
+              cursor: "pointer", fontSize: 13, textDecoration: "underline",
+              marginTop: 4,
+            }}
+          >
+            ← Back to Login
+          </button>
+        )}
+      </form>
     </div>
   );
 }

@@ -14,7 +14,10 @@ proxy.on("error", (err, _req, socket) => {
   if ("destroy" in socket) socket.destroy();
 });
 
-// Proxy matchmake requests FIRST (before static)
+// Proxy API and matchmake requests FIRST (before static)
+app.all("/api/{*splat}", (req, res) => {
+  proxy.web(req, res, { target: COLYSEUS });
+});
 app.all("/matchmake/{*splat}", (req, res) => {
   proxy.web(req, res, { target: COLYSEUS });
 });

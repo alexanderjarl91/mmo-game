@@ -27,9 +27,14 @@ interface PlayerData {
   equipChest: string;
   equipLegs: string;
   equipBoots: string;
+  attack: number;
   defense: number;
   statusEffect: string;
   statusEffectEnd: number;
+  meleeSkill: number;
+  rangedSkill: number;
+  magicSkill: number;
+  shieldingSkill: number;
 }
 
 interface SlimeData {
@@ -95,6 +100,20 @@ interface BossData {
   hitTime: number;
 }
 
+interface SpiderData {
+  displayX: number; displayY: number;
+  fromX: number; fromY: number;
+  toX: number; toY: number;
+  moveStartTime: number;
+  serverX: number; serverY: number;
+  hp: number; maxHp: number;
+  alive: boolean;
+  spiderType: string;
+  targetPlayerId: string;
+  phase: number;
+  hitTime: number;
+}
+
 interface ChatBubble { sessionId: string; message: string; time: number; }
 interface EmoteBubble { sessionId: string; emote: string; time: number; }
 interface NPCData { id: string; x: number; y: number; name: string; color: string; direction: string; dialogue: string[]; }
@@ -114,7 +133,7 @@ const DAMAGE_DURATION = 1200;
 
 const SPRITE_W = 64, SPRITE_H = 64, WALK_FRAMES = 9, ANIM_SPEED = 80;
 const DIR_ROW: Record<string, number> = { up: 8, left: 9, down: 10, right: 11 };
-const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8, TEMPLE: 9 };
+const TILE = { GRASS: 0, PATH: 1, WATER: 2, TREE: 3, ROCK: 4, FLOWERS: 5, BRIDGE: 6, WALL: 7, FLOOR: 8, TEMPLE: 9, CAVE_FLOOR: 20, CAVE_WALL: 21, WEB: 22, CAVE_ENTRY: 23, CAVE_EXIT: 24 };
 const EMOTES = ["👋", "😂", "❤️", "⚔️", "🎉"];
 const HEAL_COST = 20;
 const POTION_COOLDOWN_MS = 2000;
@@ -140,8 +159,28 @@ const ITEMS: Record<string, { name: string; icon: string; buyPrice: number; sell
   big_fish: { name: "Big Fish", icon: "🐠", buyPrice: 0, sellPrice: 30, effect: { hp: 60 } },
   golden_fish: { name: "Golden Fish", icon: "✨🐟", buyPrice: 0, sellPrice: 100, effect: { hp: 100, mp: 50 } },
   treasure_chest: { name: "Sunken Treasure", icon: "🧰", buyPrice: 0, sellPrice: 200 },
+  venomfang_dagger: { name: "Venomfang Dagger", icon: "🗡️", buyPrice: 0, sellPrice: 300, equipSlot: "weapon", equipBonus: { atk: 22 } },
+  spidersilk_robe: { name: "Spidersilk Robe", icon: "🕸️", buyPrice: 0, sellPrice: 350, equipSlot: "chest", equipBonus: { def: 12, maxMp: 40 } },
+  crown_of_webbing: { name: "Crown of Webbing", icon: "👑", buyPrice: 0, sellPrice: 400, equipSlot: "helmet", equipBonus: { def: 10, maxHp: 25 } },
+  spiderleg_boots: { name: "Spiderleg Boots", icon: "🥾", buyPrice: 0, sellPrice: 280, equipSlot: "boots", equipBonus: { def: 7, maxHp: 15 } },
+  venom_sac: { name: "Venom Sac", icon: "🧪", buyPrice: 0, sellPrice: 50, effect: { hp: 80 } },
 };
 const SHOP_ITEMS = ["health_potion", "mana_potion", "wooden_sword", "leather_helmet", "leather_chest", "leather_legs", "sandals"];
+
+// Item sprite map — items with PNG sprites use these instead of emoji
+const ITEM_SPRITES: Record<string, string> = {
+  health_potion: "/assets/health_potion.png",
+  mana_potion: "/assets/mana_potion.png",
+};
+
+function ItemIcon({ itemId, size = 22 }: { itemId: string; size?: number }) {
+  const sprite = ITEM_SPRITES[itemId];
+  const item = ITEMS[itemId];
+  if (sprite) {
+    return <img src={sprite} alt={item?.name || itemId} style={{ width: size, height: size, imageRendering: "pixelated" }} />;
+  }
+  return <span style={{ fontSize: size }}>{item?.icon || "?"}</span>;
+}
 
 // Tibia XP formula
 function xpForLevel(level: number): number {
@@ -152,9 +191,9 @@ interface Projectile { fromX: number; fromY: number; toX: number; toY: number; t
 interface LevelUpEffect { sessionId: string; level: number; time: number; }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
 
-interface Props { playerName: string; playerClass: string; isHardcore: boolean; onLogout: () => void; }
+interface Props { token: string; characterId: number; onLogout: () => void; onBackToSelect: () => void; }
 
-export default function GameCanvas({ playerName, playerClass, isHardcore, onLogout }: Props) {
+export default function GameCanvas({ token, characterId, onLogout, onBackToSelect }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const roomRef = useRef<Room | null>(null);
   const playersRef = useRef<Map<string, PlayerData>>(new Map());
@@ -163,6 +202,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const goblinsRef = useRef<Map<string, GoblinData>>(new Map());
   const skeletonsRef = useRef<Map<string, SkeletonData>>(new Map());
   const bossesRef = useRef<Map<string, BossData>>(new Map());
+  const spidersRef = useRef<Map<string, SpiderData>>(new Map());
   const droppedItemsRef = useRef<Map<string, { id: string; itemId: string; quantity: number; x: number; y: number; droppedAt: number }>>(new Map());
   const worldEventsRef = useRef<Map<string, { id: string; eventType: string; x: number; y: number; spawnedAt: number; expiresAt: number; active: boolean; hp: number; maxHp: number }>>(new Map());
   const worldEventNotifsRef = useRef<Array<{ message: string; time: number; color: string }>>([]);
@@ -177,6 +217,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
+  const [shopTab, setShopTab] = useState<"buy" | "sell">("buy");
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
   const [tooltipItem, setTooltipItem] = useState<{ itemId: string; x: number; y: number } | null>(null);
@@ -186,6 +227,11 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const [menuOpen, setMenuOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [questDialogData, setQuestDialogData] = useState<{ npcId: string; npcName: string; available: any[]; turnIn: any[] } | null>(null);
+  const [dungeonPromptOpen, setDungeonPromptOpen] = useState(false);
+  const [dungeonPromptData, setDungeonPromptData] = useState<{ playerLevel: number; minLevel: number; recommendedLevel: number; recommendedParty: string } | null>(null);
+  const screenShakeRef = useRef<{ active: boolean; startTime: number; duration: number }>({ active: false, startTime: 0, duration: 0 });
+  const poisonWaveRef = useRef<Array<{ x: number; y: number; time: number; range: number }>>([]);
+  const spiderQueenTelegraphRef = useRef<Array<{ x: number; y: number; time: number; message: string }>>([]);
   const questTrackerRef = useRef<Array<{ questId: string; name: string; icon: string; progress: number; required: number; completed: boolean; killTarget: string }>>([]);
   const questNotifRef = useRef<Array<{ text: string; time: number; color: string }>>([]);
   const npcQuestMarkersRef = useRef<Map<string, "available" | "turnin" | "">>(new Map());
@@ -211,6 +257,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const mapSizeRef = useRef({ w: 64, h: 64 });
 
   const chatBubblesRef = useRef<ChatBubble[]>([]);
+  const [chatLog, setChatLog] = useState<Array<{ name: string; message: string; time: number }>>([]);
+  const chatLogRef = useRef<HTMLDivElement>(null);
   const emoteBubblesRef = useRef<EmoteBubble[]>([]);
   const npcDialogueRef = useRef<NPCDialogue | null>(null);
   const damageNumbersRef = useRef<DamageNumber[]>([]);
@@ -228,6 +276,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   const rainEffectsRef = useRef<Array<{ x: number; y: number; time: number; range: number; hits: number }>>([]);
 
   useEffect(() => { setIsMobile("ontouchstart" in window || navigator.maxTouchPoints > 0); }, []);
+
+  // Auto-scroll chat log
+  useEffect(() => {
+    if (chatLogRef.current) {
+      chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight;
+    }
+  }, [chatLog]);
 
   /* ── Assets ─────────────────────────────────────────── */
 
@@ -387,6 +442,46 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
             ctx.beginPath(); ctx.moveTo(px + TILE_SIZE / 2, py + 8); ctx.lineTo(px + TILE_SIZE / 2, py + TILE_SIZE - 8); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(px + 8, py + TILE_SIZE / 2); ctx.lineTo(px + TILE_SIZE - 8, py + TILE_SIZE / 2); ctx.stroke();
             break;
+          case TILE.CAVE_FLOOR:
+            ctx.fillStyle = "#2a2a3a"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.fillStyle = "rgba(255,255,255,0.03)";
+            ctx.fillRect(px + 8, py + 12, 12, 8);
+            ctx.fillRect(px + 32, py + 28, 16, 10);
+            break;
+          case TILE.CAVE_WALL:
+            ctx.fillStyle = "#1a1a2a"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.fillStyle = "rgba(100,100,140,0.15)";
+            ctx.fillRect(px + 4, py + 4, 20, 12);
+            ctx.fillRect(px + 30, py + 24, 22, 16);
+            break;
+          case TILE.WEB:
+            ctx.fillStyle = "#2a2a3a"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(px, py); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE);
+            ctx.moveTo(px + TILE_SIZE, py); ctx.lineTo(px, py + TILE_SIZE);
+            ctx.moveTo(px + TILE_SIZE / 2, py); ctx.lineTo(px + TILE_SIZE / 2, py + TILE_SIZE);
+            ctx.moveTo(px, py + TILE_SIZE / 2); ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE / 2);
+            ctx.stroke();
+            ctx.beginPath(); ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 12, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.stroke();
+            break;
+          case TILE.CAVE_ENTRY:
+            ctx.fillStyle = "#2a2a3a"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.fillStyle = `rgba(255, 200, 100, ${0.1 + Math.sin(time / 500) * 0.05})`;
+            ctx.beginPath(); ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 20, 0, Math.PI * 2); ctx.fill();
+            break;
+          case TILE.CAVE_EXIT: {
+            ctx.fillStyle = "#2a2a3a"; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            const portalPulse = 0.3 + Math.sin(time / 300) * 0.15;
+            ctx.fillStyle = `rgba(60, 120, 255, ${portalPulse})`;
+            ctx.beginPath(); ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 18, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = `rgba(100, 160, 255, ${portalPulse + 0.2})`; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 22, 0, Math.PI * 2); ctx.stroke();
+            ctx.fillStyle = `rgba(150, 200, 255, ${portalPulse * 0.5})`;
+            ctx.beginPath(); ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, 8, 0, Math.PI * 2); ctx.fill();
+            break;
+          }
         }
       }
     }
@@ -413,7 +508,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
   useEffect(() => {
     let cancelled = false;
 
-    joinGame(playerName, playerClass, isHardcore).then((room) => {
+    joinGame(token, characterId).then((room) => {
       if (cancelled) { room.leave(); return; }
       roomRef.current = room;
       sessionIdRef.current = room.sessionId;
@@ -426,9 +521,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         setTimeout(() => buildTileCache(), 200);
       });
 
-      room.onMessage("chat", (data: ChatBubble) => {
+      room.onMessage("chat", (data: ChatBubble & { name: string }) => {
         chatBubblesRef.current.push({ ...data, time: performance.now() });
         if (chatBubblesRef.current.length > 20) chatBubblesRef.current.shift();
+        setChatLog(prev => {
+          const next = [...prev, { name: data.name, message: data.message, time: Date.now() }];
+          return next.length > 50 ? next.slice(-50) : next;
+        });
         sfxChat();
       });
 
@@ -493,6 +592,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
           bossHit.hitTime = performance.now();
           damageNumbersRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, damage: data.damage, time: performance.now(), color: critColor || "#e74c3c", prefix: critPrefix });
           for (let i = 0; i < 8; i++) { particlesRef.current.push({ x: bossHit.displayX + TILE_SIZE / 2, y: bossHit.displayY, vx: (Math.random() - 0.5) * 5, vy: -Math.random() * 3, life: 25 + Math.random() * 15, maxLife: 40, color: Math.random() > 0.5 ? "#ff4400" : "#ffcc00", size: 3 }); }
+        }
+        // Spider hit
+        const spiderHit = spidersRef.current.get(data.targetId);
+        if (spiderHit) {
+          spiderHit.hitTime = performance.now();
+          const spColor = spiderHit.spiderType === "queen" ? "#9b59b6" : spiderHit.spiderType === "poison" ? "#2ecc71" : "#8B4513";
+          damageNumbersRef.current.push({ x: spiderHit.displayX + TILE_SIZE / 2, y: spiderHit.displayY, damage: data.damage, time: performance.now(), color: critColor || "#e74c3c", prefix: critPrefix });
+          for (let i = 0; i < 5; i++) { particlesRef.current.push({ x: spiderHit.displayX + TILE_SIZE / 2, y: spiderHit.displayY, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3, life: 20 + Math.random() * 15, maxLife: 35, color: spColor, size: 2 }); }
         }
         // Player hit (by wolf or other mob) — dodge or damage
         const player = playersRef.current.get(data.targetId);
@@ -885,9 +992,14 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
           equipChest: player.equipChest || "",
           equipLegs: player.equipLegs || "",
           equipBoots: player.equipBoots || "",
+          attack: player.attack || 0,
           defense: player.defense || 0,
           statusEffect: player.statusEffect || "",
           statusEffectEnd: player.statusEffectEnd || 0,
+          meleeSkill: player.meleeSkill || 1,
+          rangedSkill: player.rangedSkill || 1,
+          magicSkill: player.magicSkill || 1,
+          shieldingSkill: player.shieldingSkill || 1,
         };
         // Sync inventory
         if (player.inventory) {
@@ -932,13 +1044,18 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
           p.equipChest = player.equipChest || "";
           p.equipLegs = player.equipLegs || "";
           p.equipBoots = player.equipBoots || "";
+          p.attack = player.attack || 0;
           p.defense = player.defense || 0;
           p.statusEffect = player.statusEffect || "";
           p.statusEffectEnd = player.statusEffectEnd || 0;
+          p.meleeSkill = player.meleeSkill || 1;
+          p.rangedSkill = player.rangedSkill || 1;
+          p.magicSkill = player.magicSkill || 1;
+          p.shieldingSkill = player.shieldingSkill || 1;
           // Track death moment
           if (player.hp <= 0 && p.deathTime === 0) {
             p.deathTime = performance.now();
-            if (sid === sessionIdRef.current) sfxDeath();
+            if (sessionId === sessionIdRef.current) sfxDeath();
           }
           if (player.hp > 0) p.deathTime = 0;
           // Re-sync inventory
@@ -950,7 +1067,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
             }
           }
           // Re-sync quests for local player
-          if (sid === sessionIdRef.current && player.quests) {
+          if (sessionId === sessionIdRef.current && player.quests) {
             const tracker: typeof questTrackerRef.current = [];
             for (let j = 0; j < player.quests.length; j++) {
               const q = player.quests[j];
@@ -1143,6 +1260,41 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       });
       room.state.bosses.onRemove((_: any, id: string) => { bossesRef.current.delete(id); });
 
+      // Spiders
+      room.state.spiders.onAdd((spider: any, id: string) => {
+        const data: SpiderData = {
+          displayX: spider.x, displayY: spider.y,
+          fromX: spider.x, fromY: spider.y,
+          toX: spider.x, toY: spider.y,
+          moveStartTime: 0,
+          serverX: spider.x, serverY: spider.y,
+          hp: spider.hp, maxHp: spider.maxHp,
+          alive: spider.alive,
+          spiderType: spider.spiderType || "baby",
+          targetPlayerId: spider.targetPlayerId || "",
+          phase: spider.phase || 1,
+          hitTime: 0,
+        };
+        spidersRef.current.set(id, data);
+        spider.onChange(() => {
+          const s = spidersRef.current.get(id);
+          if (!s) return;
+          const newX = spider.x, newY = spider.y;
+          if (newX !== s.serverX || newY !== s.serverY) {
+            s.fromX = s.displayX; s.fromY = s.displayY;
+            s.toX = newX; s.toY = newY;
+            s.moveStartTime = performance.now();
+          }
+          s.serverX = newX; s.serverY = newY;
+          s.hp = spider.hp; s.maxHp = spider.maxHp;
+          s.alive = spider.alive;
+          s.spiderType = spider.spiderType || "baby";
+          s.targetPlayerId = spider.targetPlayerId || "";
+          s.phase = spider.phase || 1;
+        });
+      });
+      room.state.spiders.onRemove((_: any, id: string) => { spidersRef.current.delete(id); });
+
       // Dropped items — use try/catch + retry to handle schema not ready yet
       const attachDroppedItems = () => {
         try {
@@ -1210,6 +1362,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         killFeedRef.current.push({ text: data.message, time: performance.now() });
       });
 
+      // Skill level-up notification
+      room.onMessage("skill_up", (data: { skill: string; level: number }) => {
+        const icons: Record<string, string> = { melee: "⚔️", ranged: "🏹", magic: "🔮", shielding: "🛡️" };
+        const names: Record<string, string> = { melee: "Melee", ranged: "Ranged", magic: "Magic", shielding: "Shielding" };
+        killFeedRef.current.push({
+          text: `${icons[data.skill] || "⭐"} ${names[data.skill] || data.skill} advanced to level ${data.level}!`,
+          time: performance.now(),
+        });
+        if (killFeedRef.current.length > 8) killFeedRef.current.shift();
+      });
+
       room.onMessage("boss_aoe", (data: { bossId: string; x: number; y: number; range: number }) => {
         // Spawn lots of fire particles for the AOE
         for (let i = 0; i < 30; i++) {
@@ -1226,11 +1389,41 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         }
       });
 
+      // Dungeon messages
+      room.onMessage("dungeon_prompt", (data: any) => {
+        setDungeonPromptData(data);
+        setDungeonPromptOpen(true);
+      });
+      room.onMessage("dungeon_entered", (data: any) => {
+        killFeedRef.current.push({ text: `🕷️ Entered ${data.dungeonName}`, time: performance.now() });
+      });
+      room.onMessage("dungeon_exited", () => {
+        killFeedRef.current.push({ text: "Escaped the dungeon!", time: performance.now() });
+      });
+      room.onMessage("chat_message", (data: { message: string }) => {
+        killFeedRef.current.push({ text: data.message, time: performance.now() });
+      });
+      room.onMessage("screen_shake", () => {
+        screenShakeRef.current = { active: true, startTime: performance.now(), duration: 500 };
+      });
+      room.onMessage("spider_queen_telegraph", (data: { x: number; y: number; message: string }) => {
+        spiderQueenTelegraphRef.current.push({ x: data.x, y: data.y, time: performance.now(), message: data.message });
+      });
+      room.onMessage("spider_queen_poison_wave", (data: { x: number; y: number; range: number }) => {
+        poisonWaveRef.current.push({ x: data.x, y: data.y, time: performance.now(), range: data.range });
+      });
+      room.onMessage("kill_feed", (data: { text: string }) => {
+        killFeedRef.current.push({ text: data.text, time: performance.now() });
+      });
+      room.onMessage("status_cleared", (data: { sessionId: string; effect: string }) => {
+        killFeedRef.current.push({ text: `${data.effect} cured!`, time: performance.now() });
+      });
+
       room.onLeave(() => { if (!cancelled) setConnected(false); });
     }).catch((err) => { if (!cancelled) setError(err.message || "Failed to connect"); });
 
     return () => { cancelled = true; roomRef.current?.leave(); };
-  }, [playerName, buildTileCache]);
+  }, [token, buildTileCache]);
 
   /* ── Input ──────────────────────────────────────────── */
 
@@ -1299,6 +1492,15 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       const by = b.displayY + TILE_SIZE / 2;
       const d = Math.sqrt((worldX - bx) ** 2 + (worldY - by) ** 2);
       if (d < TILE_SIZE * 1.5 && d < bestDist) { bestId = id; bestDist = d; } // larger click area for boss
+    });
+    // Check spiders
+    spidersRef.current.forEach((sp, id) => {
+      if (!sp.alive) return;
+      const sx = sp.displayX + TILE_SIZE / 2;
+      const sy = sp.displayY + TILE_SIZE / 2;
+      const d = Math.sqrt((worldX - sx) ** 2 + (worldY - sy) ** 2);
+      const clickRadius = sp.spiderType === "queen" ? TILE_SIZE * 1.5 : TILE_SIZE;
+      if (d < clickRadius && d < bestDist) { bestId = id; bestDist = d; }
     });
 
     // Check players
@@ -1455,6 +1657,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         goblinsRef.current.forEach((g, id) => checkCreature(g.serverX, g.serverY, id, g.alive));
         skeletonsRef.current.forEach((s, id) => checkCreature(s.serverX, s.serverY, id, s.alive));
         bossesRef.current.forEach((b, id) => checkCreature(b.serverX, b.serverY, id, b.alive));
+        spidersRef.current.forEach((sp, id) => checkCreature(sp.serverX, sp.serverY, id, sp.alive));
         if (closestId) { sendSetTarget(closestId); }
         return;
       }
@@ -1728,6 +1931,17 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
           b.displayX = b.fromX + (b.toX - b.fromX) * t;
           b.displayY = b.fromY + (b.toY - b.fromY) * t;
           if (t >= 1) { b.displayX = b.toX; b.displayY = b.toY; b.fromX = b.toX; b.fromY = b.toY; b.moveStartTime = 0; }
+        }
+      });
+
+      // Update spider positions
+      const SPIDER_MOVE_DURATION = 350;
+      spidersRef.current.forEach((sp) => {
+        if (sp.moveStartTime > 0) {
+          const t = Math.min((now - sp.moveStartTime) / SPIDER_MOVE_DURATION, 1);
+          sp.displayX = sp.fromX + (sp.toX - sp.fromX) * t;
+          sp.displayY = sp.fromY + (sp.toY - sp.fromY) * t;
+          if (t >= 1) { sp.displayX = sp.toX; sp.displayY = sp.toY; sp.fromX = sp.toX; sp.fromY = sp.toY; sp.moveStartTime = 0; }
         }
       });
 
@@ -2220,6 +2434,173 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         ctx.fillStyle = "#fff"; ctx.fillText(`${Math.floor(b.hp)}/${Math.floor(b.maxHp)}`, bx, bossHpY + bossHpH - 1);
       });
 
+      /* ── Spiders ───────────────────────────────────── */
+      spidersRef.current.forEach((sp, spId) => {
+        if (!sp.alive) return;
+        const sx = sp.displayX + TILE_SIZE / 2 - camX;
+        const sy = sp.displayY + TILE_SIZE / 2 - camY;
+        if (sx < -100 || sx > w + 100 || sy < -100 || sy > h + 100) return;
+
+        const isTargeted = myTargetId === spId;
+        const isQueen = sp.spiderType === "queen";
+        const isElite = sp.spiderType === "elite";
+        const isPoisonType = sp.spiderType === "poison";
+        const isCave = sp.spiderType === "cave";
+
+        if (isTargeted) {
+          const pulse = 0.5 + Math.sin(time / 200) * 0.3;
+          ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
+          ctx.lineWidth = isQueen ? 4 : 3;
+          const extra = isQueen ? 8 : 0;
+          ctx.strokeRect(sx - TILE_SIZE / 2 - extra, sy - TILE_SIZE / 2 - extra, TILE_SIZE + extra * 2, TILE_SIZE + extra * 2);
+        }
+
+        const spHit = sp.hitTime && (now - sp.hitTime < 200);
+        ctx.save();
+        if (spHit) ctx.globalAlpha = 0.6 + Math.sin(now / 30) * 0.4;
+
+        // Size based on type
+        const scale = isQueen ? 1.6 : isElite ? 1.3 : isCave || isPoisonType ? 1.0 : 0.7;
+        const bodyW = 16 * scale, bodyH = 12 * scale;
+
+        // Shadow
+        ctx.beginPath(); ctx.ellipse(sx, sy + 14 * scale, bodyW * 0.8, 4 * scale, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fill();
+
+        // Body color
+        let bodyColor = "#8B4513"; // baby: light brown
+        if (isCave) bodyColor = "#4a3020"; // dark brown
+        else if (isPoisonType) bodyColor = "#2d6b3f"; // green
+        else if (isElite) bodyColor = "#3a0a0a"; // red/black
+        else if (isQueen) bodyColor = sp.phase >= 2 ? "#4a0040" : "#2d0033"; // purple/black
+
+        // Body (oval)
+        ctx.fillStyle = bodyColor;
+        ctx.beginPath(); ctx.ellipse(sx, sy, bodyW, bodyH, 0, 0, Math.PI * 2); ctx.fill();
+
+        // Head (smaller circle in front)
+        ctx.beginPath(); ctx.ellipse(sx, sy - bodyH * 0.8, bodyW * 0.6, bodyH * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+
+        // Eyes
+        const eyeCol = isQueen ? "#ff00ff" : isElite ? "#ff3333" : isPoisonType ? "#00ff66" : "#ff6600";
+        ctx.fillStyle = eyeCol;
+        ctx.beginPath(); ctx.arc(sx - 4 * scale, sy - bodyH * 0.9, 2 * scale, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(sx + 4 * scale, sy - bodyH * 0.9, 2 * scale, 0, Math.PI * 2); ctx.fill();
+
+        // Legs (4 on each side)
+        ctx.strokeStyle = bodyColor; ctx.lineWidth = 2 * scale;
+        const legAnim = Math.sin(time / 150) * 3 * scale;
+        for (let i = 0; i < 4; i++) {
+          const ly = sy - bodyH * 0.3 + i * bodyH * 0.2;
+          // Left legs
+          ctx.beginPath();
+          ctx.moveTo(sx - bodyW * 0.8, ly);
+          ctx.lineTo(sx - bodyW * 1.4, ly - 6 * scale + (i % 2 === 0 ? legAnim : -legAnim));
+          ctx.stroke();
+          // Right legs
+          ctx.beginPath();
+          ctx.moveTo(sx + bodyW * 0.8, ly);
+          ctx.lineTo(sx + bodyW * 1.4, ly - 6 * scale + (i % 2 === 0 ? -legAnim : legAnim));
+          ctx.stroke();
+        }
+
+        // Queen crown
+        if (isQueen) {
+          ctx.fillStyle = "#ffd700";
+          ctx.beginPath();
+          ctx.moveTo(sx - 10, sy - bodyH * 1.3);
+          ctx.lineTo(sx - 7, sy - bodyH * 1.6);
+          ctx.lineTo(sx - 3, sy - bodyH * 1.35);
+          ctx.lineTo(sx, sy - bodyH * 1.65);
+          ctx.lineTo(sx + 3, sy - bodyH * 1.35);
+          ctx.lineTo(sx + 7, sy - bodyH * 1.6);
+          ctx.lineTo(sx + 10, sy - bodyH * 1.3);
+          ctx.closePath();
+          ctx.fill();
+
+          // Enrage particles
+          if (sp.phase >= 2 && Math.random() < 0.4) {
+            particlesRef.current.push({
+              x: sp.displayX + TILE_SIZE / 2 + (Math.random() - 0.5) * 20,
+              y: sp.displayY + TILE_SIZE / 2 - 10,
+              vx: (Math.random() - 0.5) * 2, vy: -Math.random() * 2,
+              life: 400, maxLife: 400,
+              color: Math.random() > 0.5 ? "#9b59b6" : "#2ecc71",
+              size: 2 + Math.random() * 2,
+            });
+          }
+        }
+
+        // Poison drip for poison spiders
+        if (isPoisonType && Math.random() < 0.1) {
+          particlesRef.current.push({
+            x: sp.displayX + TILE_SIZE / 2, y: sp.displayY + TILE_SIZE / 2 + 8,
+            vx: (Math.random() - 0.5) * 0.5, vy: Math.random() * 1.5,
+            life: 300, maxLife: 300, color: "#2ecc71", size: 2,
+          });
+        }
+
+        ctx.restore();
+
+        // Name & HP
+        const spName = isQueen ? (sp.phase >= 2 ? "🕷️ Spider Queen (Enraged)" : "🕷️ Spider Queen") :
+          isElite ? "Elite Spider" : isPoisonType ? "Poison Spider" : isCave ? "Cave Spider" : "Baby Spider";
+        const nameSize = isQueen ? 13 : 11;
+        ctx.font = `bold ${nameSize}px 'Segoe UI', sans-serif`; ctx.textAlign = "center";
+        const nameColor = isQueen ? (sp.phase >= 2 ? "#ff44ff" : "#cc88ff") : isElite ? "#ff4444" : isPoisonType ? "#44ff88" : "#ff8844";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(spName, sx + 1, sy - bodyH * scale - 5);
+        ctx.fillStyle = nameColor; ctx.fillText(spName, sx, sy - bodyH * scale - 6);
+
+        // HP bar
+        if (sp.hp < sp.maxHp || isTargeted) {
+          const hpW = isQueen ? 60 : 40;
+          const hpH = isQueen ? 6 : 4;
+          const hpX = sx - hpW / 2;
+          const hpY = sy - bodyH * scale + 1;
+          ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(hpX - 1, hpY - 1, hpW + 2, hpH + 2);
+          ctx.fillStyle = "#1a1a1a"; ctx.fillRect(hpX, hpY, hpW, hpH);
+          const hpRatio = sp.maxHp > 0 ? sp.hp / sp.maxHp : 0;
+          ctx.fillStyle = hpRatio > 0.4 ? "#e74c3c" : "#ff0000";
+          ctx.fillRect(hpX, hpY, hpW * hpRatio, hpH);
+          if (isQueen) {
+            ctx.font = "bold 9px 'Segoe UI', sans-serif";
+            ctx.fillStyle = "#fff"; ctx.fillText(`${Math.floor(sp.hp)}/${Math.floor(sp.maxHp)}`, sx, hpY + hpH - 1);
+          }
+        }
+      });
+
+      /* ── Spider Queen Poison Wave Effect ──────────── */
+      poisonWaveRef.current = poisonWaveRef.current.filter(pw => {
+        const elapsed = now - pw.time;
+        if (elapsed > 2000) return false;
+        const pwx = pw.x + TILE_SIZE / 2 - camX;
+        const pwy = pw.y + TILE_SIZE / 2 - camY;
+        const maxR = pw.range * TILE_SIZE;
+        const r = Math.min(elapsed / 800, 1) * maxR;
+        const alpha = Math.max(0, 0.3 - elapsed / 2000 * 0.3);
+        ctx.beginPath();
+        ctx.arc(pwx, pwy, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(30, 200, 50, ${alpha})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(50, 255, 80, ${alpha * 1.5})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        return true;
+      });
+
+      /* ── Spider Queen Telegraph ───────────────────── */
+      spiderQueenTelegraphRef.current = spiderQueenTelegraphRef.current.filter(tg => {
+        const elapsed = now - tg.time;
+        if (elapsed > 2000) return false;
+        const tgx = tg.x + TILE_SIZE / 2 - camX;
+        const tgy = tg.y - 40 - camY;
+        const alpha = Math.max(0, 1 - elapsed / 2000);
+        ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
+        ctx.fillStyle = `rgba(255, 100, 50, ${alpha})`;
+        ctx.fillText(tg.message, tgx, tgy - elapsed * 0.02);
+        return true;
+      });
+
       /* ── Ground Items (dropped loot) ────────────────── */
       droppedItemsRef.current.forEach((drop) => {
         const dx = drop.x + TILE_SIZE / 2 - camX;
@@ -2563,7 +2944,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         }
 
         // Name above HP bar
-        const nameStr = p.level > 1 ? `${p.name} [${p.level}]` : p.name;
+        const hcPrefix = p.isHardcore ? "💀 " : "";
+        const nameStr = p.level > 1 ? `${hcPrefix}${p.name} [${p.level}]` : `${hcPrefix}${p.name}`;
         ctx.font = "bold 12px 'Segoe UI', sans-serif"; ctx.textAlign = "center";
         ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillText(nameStr, px + 1, py - 53);
         ctx.fillStyle = "#fff"; ctx.fillText(nameStr, px, py - 54);
@@ -2977,6 +3359,34 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
         ctx.restore();
       }
 
+      /* ── Dungeon Fog/Darkness ──────────────────────── */
+      if (me && me.toX >= 48 * TILE_SIZE) {
+        // Player is in dungeon area — dark overlay with light cutout
+        ctx.save();
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(0, 0, w, h);
+        // Cut out a circle around the player
+        ctx.globalCompositeOperation = "destination-out";
+        const playerScreenX = me.displayX + TILE_SIZE / 2 - camX;
+        const playerScreenY = me.displayY + TILE_SIZE / 2 - camY;
+        const lightRadius = TILE_SIZE * 5;
+        const grad = ctx.createRadialGradient(playerScreenX, playerScreenY, 0, playerScreenX, playerScreenY, lightRadius);
+        grad.addColorStop(0, "rgba(0,0,0,1)");
+        grad.addColorStop(0.6, "rgba(0,0,0,0.8)");
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(playerScreenX, playerScreenY, lightRadius, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+
+      /* ── Screen Shake ─────────────────────────────── */
+      if (screenShakeRef.current.active) {
+        const elapsed = now - screenShakeRef.current.startTime;
+        if (elapsed > screenShakeRef.current.duration) {
+          screenShakeRef.current.active = false;
+        }
+      }
+
       /* ── HUD ─────────────────────────────────────────── */
 
       ctx.font = "12px monospace"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.textAlign = "left";
@@ -2997,8 +3407,13 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
           if (tGoblin && tGoblin.alive) { targetName = tGoblin.variant === "shaman" ? "Goblin Shaman" : tGoblin.variant === "archer" ? "Goblin Archer" : "Goblin"; targetHp = tGoblin.hp; targetMaxHp = tGoblin.maxHp; targetColor = "#7dcea0"; }
           const tSkeleton = skeletonsRef.current.get(myTargetId);
           if (tSkeleton && tSkeleton.alive) { targetName = "Skeleton"; targetHp = tSkeleton.hp; targetMaxHp = tSkeleton.maxHp; targetColor = "#bdc3c7"; }
+          const tSpider = spidersRef.current.get(myTargetId);
+          if (tSpider && tSpider.alive) {
+            const sn = tSpider.spiderType === "queen" ? (tSpider.phase >= 2 ? "🕷️ Spider Queen (Enraged)" : "🕷️ Spider Queen") : tSpider.spiderType === "elite" ? "Elite Spider" : tSpider.spiderType === "poison" ? "Poison Spider" : tSpider.spiderType === "cave" ? "Cave Spider" : "Baby Spider";
+            targetName = sn; targetHp = tSpider.hp; targetMaxHp = tSpider.maxHp; targetColor = tSpider.spiderType === "queen" ? "#cc88ff" : tSpider.spiderType === "poison" ? "#2ecc71" : "#8B4513";
+          }
           const tPlayer = myTargetId !== sessionIdRef.current ? playersRef.current.get(myTargetId) : null;
-          if (tPlayer && tPlayer.hp > 0) { targetName = `${tPlayer.name} [${tPlayer.level}]`; targetHp = tPlayer.hp; targetMaxHp = tPlayer.maxHp; targetColor = "#e74c3c"; }
+          if (tPlayer && tPlayer.hp > 0) { targetName = `${tPlayer.isHardcore ? "💀 " : ""}${tPlayer.name} [${tPlayer.level}]`; targetHp = tPlayer.hp; targetMaxHp = tPlayer.maxHp; targetColor = "#e74c3c"; }
           const tEvent = worldEventsRef.current.get(myTargetId);
           if (tEvent && tEvent.active && tEvent.eventType === "golden_slime" && tEvent.hp > 0) { targetName = "✨ Golden Slime"; targetHp = tEvent.hp; targetMaxHp = tEvent.maxHp; targetColor = "#ffd700"; }
 
@@ -3127,8 +3542,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
             cooldownPct: getCooldownPct(abilityCd4),
             cdAbility: abilityCd4,
           },
-          { key: "5", icon: "❤️", spriteId: "health_potion", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
-          { key: "6", icon: "💙", spriteId: "mana_potion", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: 0 },
+          { key: "5", icon: "❤️", spriteId: "health_potion", name: "HP Pot", cost: 0, active: true, canUse: me.hp < me.maxHp && me.inventory.some(s => s.itemId === "health_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "health_potion" ? n + s.quantity : n, 0), cooldownPct: (() => { const elapsed = cdNow - lastPotionUse.current; if (elapsed >= POTION_COOLDOWN_MS) return 0; return 1 - elapsed / POTION_COOLDOWN_MS; })() },
+          { key: "6", icon: "💙", spriteId: "mana_potion", name: "MP Pot", cost: 0, active: true, canUse: me.mp < me.maxMp && me.inventory.some(s => s.itemId === "mana_potion" && s.quantity > 0), count: me.inventory.reduce((n, s) => s.itemId === "mana_potion" ? n + s.quantity : n, 0), cooldownPct: (() => { const elapsed = cdNow - lastPotionUse.current; if (elapsed >= POTION_COOLDOWN_MS) return 0; return 1 - elapsed / POTION_COOLDOWN_MS; })() },
         ];
 
         // Recalculate bar dimensions for 6 slots
@@ -3380,20 +3795,6 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       // Update React state for HUD overlay (throttled)
       if (me && Math.floor(time / 500) !== Math.floor((time - 16) / 500)) {
         setMyStats({ hp: me.hp, maxHp: me.maxHp, xp: me.xp, level: me.level, playerClass: me.playerClass, targetId: me.targetId, isHardcore: me.isHardcore, gold: me.gold });
-        // Save character to localStorage
-        try {
-          localStorage.setItem("mmo_character", JSON.stringify({
-            name: me.name, playerClass: me.playerClass,
-            level: me.level, xp: me.xp, savedAt: Date.now(),
-            isHardcore: me.isHardcore,
-            gold: me.gold,
-            inventory: me.inventory,
-            equipment: {
-              weapon: me.equipWeapon, helmet: me.equipHelmet,
-              chest: me.equipChest, legs: me.equipLegs, boots: me.equipBoots,
-            },
-          }));
-        } catch {}
       }
 
       animId = requestAnimationFrame(loop);
@@ -3405,7 +3806,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
 
   /* ── Render ─────────────────────────────────────────── */
 
-  if (error) return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", background: "#1a1a2e", color: "#e74c3c", fontSize: 20, padding: 20, textAlign: "center" }}><div>⚠️ Connection Error</div><div style={{ fontSize: 14, color: "#aaa", marginTop: 10 }}>{error}</div><button onClick={() => window.location.reload()} style={{ marginTop: 20, padding: "10px 24px", background: "#3498db", color: "#fff", border: "none", borderRadius: 8, fontSize: 16, cursor: "pointer" }}>Retry</button></div>;
+  if (error) return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", background: "#1a1a2e", color: "#e74c3c", fontSize: 20, padding: 20, textAlign: "center" }}><div>⚠️ Connection Error</div><div style={{ fontSize: 14, color: "#aaa", marginTop: 10 }}>{error}</div><button onClick={() => window.location.reload()} style={{ marginTop: 20, padding: "10px 24px", background: "#3498db", color: "#fff", border: "none", borderRadius: 8, fontSize: 16, cursor: "pointer" }}>Retry</button><button onClick={() => { localStorage.removeItem("mmo_token"); onLogout(); }} style={{ marginTop: 10, padding: "10px 24px", background: "transparent", color: "#aaa", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 8, fontSize: 14, cursor: "pointer" }}>Back to Login</button></div>;
   if (!connected) return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", background: "#1a1a2e", color: "#fff", fontSize: 20 }}><div style={{ fontSize: 32, marginBottom: 16 }}>🌍</div><div>Connecting...</div><div style={{ fontSize: 12, color: "#666", marginTop: 10 }}>If this takes too long, try refreshing</div></div>;
 
   const btnStyle: React.CSSProperties = {
@@ -3436,8 +3837,8 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
               <div style={{ color: "#ccc", fontSize: 14, marginTop: 8, textAlign: "center" }}>Your character has been permanently lost.</div>
               <button
                 onClick={() => {
-                  localStorage.removeItem("mmo_character");
-                  window.location.reload();
+                  roomRef.current?.leave();
+                  onBackToSelect();
                 }}
                 style={{
                   marginTop: 20, padding: "12px 36px", background: "#333", color: "#fff",
@@ -3466,10 +3867,33 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       )}
 
 
+      {/* Chat log — fixed 5-line height above HP bars */}
+      <div style={{
+          position: "absolute", bottom: chatOpen ? 120 : 82, left: 12, zIndex: 15,
+          width: Math.min(300, window.innerWidth - 24), height: 85,
+          overflowY: "auto", overflowX: "hidden",
+          background: "rgba(0,0,0,0.45)", borderRadius: 6,
+          padding: "4px 8px", pointerEvents: "auto",
+          scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.2) transparent",
+        }}
+          ref={chatLogRef}
+          onWheel={(e) => e.stopPropagation()}
+        >
+          {chatLog.length === 0 && (
+            <div style={{ fontSize: 11, color: "#666", fontStyle: "italic" }}>Press Enter to chat</div>
+          )}
+          {chatLog.map((msg, i) => (
+            <div key={i} style={{ fontSize: 11, lineHeight: 1.5, wordBreak: "break-word" }}>
+              <span style={{ color: "#f1c40f", fontWeight: "bold" }}>{msg.name}: </span>
+              <span style={{ color: "#ddd" }}>{msg.message}</span>
+            </div>
+          ))}
+        </div>
+
       {chatOpen && (
-        <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 20 }}>
+        <div style={{ position: "absolute", bottom: 64, left: 12, zIndex: 20 }}>
           <input ref={chatInputRef} value={chatText} onChange={(e) => setChatText(e.target.value)} maxLength={100} placeholder="Type a message..."
-            style={{ width: Math.min(400, window.innerWidth - 40), padding: "10px 16px", borderRadius: 8, border: "2px solid rgba(255,255,255,0.3)", background: "rgba(0,0,0,0.8)", color: "#fff", fontSize: 14, outline: "none" }} />
+            style={{ width: Math.min(300, window.innerWidth - 24), padding: "8px 12px", borderRadius: 6, border: "2px solid rgba(255,255,255,0.3)", background: "rgba(0,0,0,0.8)", color: "#fff", fontSize: 13, outline: "none" }} />
         </div>
       )}
 
@@ -3550,6 +3974,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                 <h2 style={{ color: "#c4b5fd", margin: 0, fontSize: 18 }}>🎒 Inventory</h2>
                 <div style={{ textAlign: "right" }}>
                   <span style={{ color: "#f1c40f", fontSize: 13 }}>💰 {me.gold}g</span>
+                  <span style={{ color: "#e74c3c", fontSize: 11, marginLeft: 10 }}>⚔️ {me.attack} ATK</span>
                   {me.defense > 0 && <span style={{ color: "#7ec8e3", fontSize: 11, marginLeft: 10 }}>🛡️ {me.defense} DEF</span>}
                 </div>
               </div>
@@ -3577,7 +4002,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                     }}
                     onTouchEnd={() => { if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current); setTooltipItem(null); }}
                     >
-                      <span style={{ fontSize: 20 }}>{equipped ? equipped.icon : es.icon}</span>
+                      {equipped ? <ItemIcon itemId={es.itemId} size={20} /> : <span style={{ fontSize: 20 }}>{es.icon}</span>}
                       <span style={{ fontSize: 8, color: equipped ? "#2ecc71" : "#555", marginTop: 2 }}>{es.label}</span>
                       {equipped && (
                         <span style={{ fontSize: 8, color: "#aaa", marginTop: 1 }}>{equipped.name.split(" ")[0]}</span>
@@ -3636,7 +4061,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                     >
                       {item && (
                         <>
-                          <span style={{ fontSize: 22 }}>{item.icon}</span>
+                          <ItemIcon itemId={slot!.itemId} size={22} />
                           <span style={{ fontSize: 9, color: "#ccc", marginTop: 2 }}>{item.name.split(" ")[0]}</span>
                           {slot!.quantity > 1 && (
                             <span style={{
@@ -3697,7 +4122,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
             boxShadow: "0 4px 20px rgba(0,0,0,0.6)",
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 20 }}>{item.icon}</span>
+              <ItemIcon itemId={tooltipItem.itemId} size={20} />
               <div>
                 <div style={{ color: "#fff", fontWeight: "bold", fontSize: 13 }}>{item.name}</div>
                 <div style={{ color: typeColor, fontSize: 10 }}>{typeLabel}</div>
@@ -3852,6 +4277,30 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                 </div>
               </div>
 
+              {/* Skills */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 12 }}>
+                <div style={{ background: "rgba(231,76,60,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#e74c3c", fontSize: 9 }}>⚔️ Melee</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{me.meleeSkill}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>+{Math.floor(me.meleeSkill * 0.5)} dmg</div>
+                </div>
+                <div style={{ background: "rgba(46,204,113,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#2ecc71", fontSize: 9 }}>🏹 Ranged</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{me.rangedSkill}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>+{Math.floor(me.rangedSkill * 0.5)} dmg</div>
+                </div>
+                <div style={{ background: "rgba(155,89,182,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#9b59b6", fontSize: 9 }}>🔮 Magic</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{me.magicSkill}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>+{Math.floor(me.magicSkill * 0.3)} effect</div>
+                </div>
+                <div style={{ background: "rgba(52,152,219,0.08)", borderRadius: 6, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ color: "#3498db", fontSize: 9 }}>🛡️ Shielding</div>
+                  <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{me.shieldingSkill}</div>
+                  <div style={{ color: "#888", fontSize: 8 }}>-{Math.floor(me.shieldingSkill * 0.3)} dmg</div>
+                </div>
+              </div>
+
               {/* Equipment */}
               <div style={{ marginBottom: 12 }}>
                 <div style={{ color: "#aaa", fontSize: 10, marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Equipment</div>
@@ -3864,7 +4313,7 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
                       background: equipped ? "rgba(46,204,113,0.08)" : "transparent",
                       borderRadius: 4,
                     }}>
-                      <span style={{ fontSize: 14, width: 24, textAlign: "center" }}>{equipped ? equipped.icon : es.icon}</span>
+                      <span style={{ width: 24, textAlign: "center", display: "inline-flex", justifyContent: "center" }}>{equipped ? <ItemIcon itemId={es.itemId} size={14} /> : <span style={{ fontSize: 14 }}>{es.icon}</span>}</span>
                       <span style={{ color: "#888", fontSize: 10, width: 50 }}>{es.label}</span>
                       <span style={{ color: equipped ? "#fff" : "#444", fontSize: 11, flex: 1 }}>
                         {equipped ? equipped.name : "— Empty —"}
@@ -3895,32 +4344,75 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
       {/* Shop overlay */}
       {shopOpen && myStats && (
         <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25 }} onClick={() => setShopOpen(false)}>
-          <div style={{ background: "#1a1a2e", border: "2px solid #f1c40f", borderRadius: 12, padding: 24, minWidth: 280, maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ background: "#1a1a2e", border: "2px solid #f1c40f", borderRadius: 12, padding: 24, minWidth: 280, maxWidth: 400, maxHeight: "80vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <h2 style={{ color: "#f1c40f", margin: 0, fontSize: 20 }}>🏪 Pip&apos;s Shop</h2>
               <span style={{ color: "#f1c40f", fontSize: 14 }}>💰 {myStats.gold}</span>
             </div>
-            {SHOP_ITEMS.map(itemId => {
-              const item = ITEMS[itemId];
-              if (!item) return null;
-              const canAfford = myStats.gold >= item.buyPrice;
-              return (
-                <div key={itemId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 8, marginBottom: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 24 }}>{item.icon}</span>
-                    <div>
-                      <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
-                      <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : item.effect?.mp ? `+${item.effect.mp} MP` : item.equipBonus ? [item.equipBonus.atk && `+${item.equipBonus.atk} ATK`, item.equipBonus.def && `+${item.equipBonus.def} DEF`, item.equipBonus.maxHp && `+${item.equipBonus.maxHp} HP`, item.equipBonus.maxMp && `+${item.equipBonus.maxMp} MP`].filter(Boolean).join(", ") : ""}</div>
+            {/* Buy / Sell tabs */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+              <button onClick={() => setShopTab("buy")} style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: shopTab === "buy" ? "2px solid #f1c40f" : "1px solid rgba(255,255,255,0.2)", background: shopTab === "buy" ? "rgba(241,196,15,0.15)" : "transparent", color: shopTab === "buy" ? "#f1c40f" : "#888", cursor: "pointer", fontSize: 14, fontWeight: "bold" }}>Buy</button>
+              <button onClick={() => setShopTab("sell")} style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: shopTab === "sell" ? "2px solid #2ecc71" : "1px solid rgba(255,255,255,0.2)", background: shopTab === "sell" ? "rgba(46,204,113,0.15)" : "transparent", color: shopTab === "sell" ? "#2ecc71" : "#888", cursor: "pointer", fontSize: 14, fontWeight: "bold" }}>Sell</button>
+            </div>
+            <div style={{ overflowY: "auto", flex: 1 }}>
+            {shopTab === "buy" ? (
+              SHOP_ITEMS.map(itemId => {
+                const item = ITEMS[itemId];
+                if (!item) return null;
+                const canAfford = myStats.gold >= item.buyPrice;
+                return (
+                  <div key={itemId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 8, marginBottom: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <ItemIcon itemId={itemId} size={24} />
+                      <div>
+                        <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name}</div>
+                        <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : item.effect?.mp ? `+${item.effect.mp} MP` : item.equipBonus ? [item.equipBonus.atk && `+${item.equipBonus.atk} ATK`, item.equipBonus.def && `+${item.equipBonus.def} DEF`, item.equipBonus.maxHp && `+${item.equipBonus.maxHp} HP`, item.equipBonus.maxMp && `+${item.equipBonus.maxMp} MP`].filter(Boolean).join(", ") : ""}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ color: "#f1c40f", fontSize: 13 }}>{item.buyPrice}g</span>
+                      <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 1 })} disabled={!canAfford} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: canAfford ? "#27ae60" : "#555", color: "#fff", cursor: canAfford ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×1</button>
+                      <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 10 })} disabled={myStats.gold < item.buyPrice * 10} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: myStats.gold >= item.buyPrice * 10 ? "#2980b9" : "#555", color: "#fff", cursor: myStats.gold >= item.buyPrice * 10 ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×10</button>
                     </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ color: "#f1c40f", fontSize: 13 }}>{item.buyPrice}g</span>
-                    <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 1 })} disabled={!canAfford} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: canAfford ? "#27ae60" : "#555", color: "#fff", cursor: canAfford ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×1</button>
-                    <button onClick={() => roomRef.current?.send("shop_buy", { itemId, quantity: 10 })} disabled={myStats.gold < item.buyPrice * 10} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: myStats.gold >= item.buyPrice * 10 ? "#2980b9" : "#555", color: "#fff", cursor: myStats.gold >= item.buyPrice * 10 ? "pointer" : "default", fontSize: 12, fontWeight: "bold" }}>×10</button>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            ) : (
+              (() => {
+                const meData = playersRef.current.get(sessionIdRef.current);
+                if (!meData) return <div style={{ color: "#888", textAlign: "center", padding: 20, fontSize: 14 }}>No items to sell</div>;
+                const sellableItems = meData.inventory.filter((slot: { itemId: string; quantity: number }) => {
+                  const item = ITEMS[slot.itemId];
+                  return item && item.sellPrice > 0 && slot.quantity > 0;
+                });
+                if (sellableItems.length === 0) {
+                  return <div style={{ color: "#888", textAlign: "center", padding: 20, fontSize: 14 }}>No items to sell</div>;
+                }
+                return sellableItems.map((slot: { itemId: string; quantity: number }, idx: number) => {
+                  const item = ITEMS[slot.itemId];
+                  if (!item) return null;
+                  return (
+                    <div key={`${slot.itemId}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 8, marginBottom: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <ItemIcon itemId={slot.itemId} size={24} />
+                        <div>
+                          <div style={{ color: "#fff", fontWeight: "bold", fontSize: 14 }}>{item.name} {slot.quantity > 1 ? `(${slot.quantity})` : ""}</div>
+                          <div style={{ color: "#888", fontSize: 11 }}>{item.effect?.hp ? `+${item.effect.hp} HP` : item.effect?.mp ? `+${item.effect.mp} MP` : item.equipBonus ? [item.equipBonus.atk && `+${item.equipBonus.atk} ATK`, item.equipBonus.def && `+${item.equipBonus.def} DEF`, item.equipBonus.maxHp && `+${item.equipBonus.maxHp} HP`, item.equipBonus.maxMp && `+${item.equipBonus.maxMp} MP`].filter(Boolean).join(", ") : ""}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ color: "#2ecc71", fontSize: 13 }}>{item.sellPrice}g</span>
+                        <button onClick={() => roomRef.current?.send("shop_sell", { itemId: slot.itemId, quantity: 1 })} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#e67e22", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: "bold" }}>Sell 1</button>
+                        {slot.quantity > 1 && (
+                          <button onClick={() => roomRef.current?.send("shop_sell", { itemId: slot.itemId, quantity: slot.quantity })} style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#e74c3c", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: "bold" }}>All</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                });
+              })()
+            )}
+            </div>
             <button onClick={() => setShopOpen(false)} style={{ marginTop: 12, width: "100%", padding: "8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#aaa", cursor: "pointer", fontSize: 14 }}>Close</button>
           </div>
         </div>
@@ -4195,6 +4687,46 @@ export default function GameCanvas({ playerName, playerClass, isHardcore, onLogo
               border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
               color: "#94a3b8", cursor: "pointer", fontSize: 12,
             }}>Close (Esc)</button>
+          </div>
+        </div>
+      )}
+
+      {/* Dungeon Entry Dialog */}
+      {dungeonPromptOpen && dungeonPromptData && (
+        <div style={{
+          position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.6)", zIndex: 40,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }} onClick={() => setDungeonPromptOpen(false)}>
+          <div style={{
+            background: "linear-gradient(135deg, #1a1a2e 0%, #0f1923 100%)",
+            border: "2px solid #9b59b6", borderRadius: 12, padding: 24,
+            minWidth: 320, maxWidth: 400, textAlign: "center", color: "#fff",
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🕷️</div>
+            <h2 style={{ margin: "0 0 8px", color: "#9b59b6", fontSize: 20 }}>Spider Queen's Lair</h2>
+            <div style={{ color: "#aaa", fontSize: 13, marginBottom: 12 }}>
+              Recommended: Level {dungeonPromptData.recommendedLevel} | Party: {dungeonPromptData.recommendedParty}
+            </div>
+            <div style={{ color: "#ccc", fontSize: 13, marginBottom: 16, fontStyle: "italic" }}>
+              "Deep beneath the caves lies the Spider Queen... Many have entered. Few return."
+            </div>
+            {dungeonPromptData.playerLevel < dungeonPromptData.minLevel ? (
+              <div style={{ color: "#e74c3c", fontSize: 14, fontWeight: "bold" }}>
+                You must be at least level {dungeonPromptData.minLevel} to enter!
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+                <button onClick={() => { roomRef.current?.send("dungeon_enter"); setDungeonPromptOpen(false); }}
+                  style={{ padding: "10px 24px", background: "#9b59b6", color: "#fff", border: "none", borderRadius: 8, fontSize: 15, fontWeight: "bold", cursor: "pointer" }}>
+                  Enter Dungeon
+                </button>
+                <button onClick={() => setDungeonPromptOpen(false)}
+                  style={{ padding: "10px 24px", background: "#333", color: "#aaa", border: "1px solid #555", borderRadius: 8, fontSize: 15, cursor: "pointer" }}>
+                  Decline
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

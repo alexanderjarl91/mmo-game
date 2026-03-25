@@ -237,6 +237,42 @@ export const ITEMS: Record<string, ItemDef> = {
     buyPrice: 0, sellPrice: 200,
     icon: "🧰",
   },
+  // ── Spider Queen's Lair items ──
+  venomfang_dagger: {
+    id: "venomfang_dagger", type: "weapon", name: "Venomfang Dagger", icon: "🗡️",
+    description: "A dagger dripping with spider venom",
+    stackable: false, maxStack: 1, buyPrice: 0, sellPrice: 300,
+    equipSlot: "weapon", equipBonus: { atk: 22 },
+    dropWeight: 15,
+  },
+  spidersilk_robe: {
+    id: "spidersilk_robe", type: "armor", name: "Spidersilk Robe", icon: "🕸️",
+    description: "Woven from enchanted spider silk",
+    stackable: false, maxStack: 1, buyPrice: 0, sellPrice: 350,
+    equipSlot: "chest", equipBonus: { def: 12, maxMp: 40 },
+    dropWeight: 15,
+  },
+  crown_of_webbing: {
+    id: "crown_of_webbing", type: "armor", name: "Crown of Webbing", icon: "👑",
+    description: "A crown pulsing with dark energy",
+    stackable: false, maxStack: 1, buyPrice: 0, sellPrice: 400,
+    equipSlot: "helmet", equipBonus: { def: 10, maxHp: 25 },
+    dropWeight: 10,
+  },
+  spiderleg_boots: {
+    id: "spiderleg_boots", type: "armor", name: "Spiderleg Boots", icon: "🥾",
+    description: "Boots crafted from spider legs — eerily fast",
+    stackable: false, maxStack: 1, buyPrice: 0, sellPrice: 280,
+    equipSlot: "boots", equipBonus: { def: 7, maxHp: 15 },
+    dropWeight: 15,
+  },
+  venom_sac: {
+    id: "venom_sac", type: "consumable", name: "Venom Sac", icon: "🧪",
+    description: "Heals 80 HP and cures poison",
+    stackable: true, maxStack: 5, buyPrice: 0, sellPrice: 50,
+    effect: { hp: 80 },
+    dropWeight: 30,
+  },
 };
 
 export const SHOP_ITEMS = ["health_potion", "mana_potion", "wooden_sword", "leather_helmet", "leather_chest", "leather_legs", "sandals"];
@@ -285,6 +321,28 @@ export const LOOT_TABLES: Record<string, LootEntry[]> = {
     { itemId: "iron_legs", chance: 0.12 },
     { itemId: "iron_boots", chance: 0.15 },
     { itemId: "iron_sword", chance: 0.10 },
+  ],
+  spider_baby: [
+    { itemId: "health_potion", chance: 0.15 },
+    { itemId: "venom_sac", chance: 0.05 },
+  ],
+  spider_cave: [
+    { itemId: "health_potion", chance: 0.20 },
+    { itemId: "mana_potion", chance: 0.10 },
+    { itemId: "venom_sac", chance: 0.08 },
+  ],
+  spider_poison: [
+    { itemId: "health_potion", chance: 0.20, minQty: 1, maxQty: 2 },
+    { itemId: "mana_potion", chance: 0.15 },
+    { itemId: "venom_sac", chance: 0.12 },
+    { itemId: "spiderleg_boots", chance: 0.02 },
+  ],
+  spider_elite: [
+    { itemId: "health_potion", chance: 0.30, minQty: 2, maxQty: 3 },
+    { itemId: "mana_potion", chance: 0.25, minQty: 1, maxQty: 2 },
+    { itemId: "venom_sac", chance: 0.15 },
+    { itemId: "venomfang_dagger", chance: 0.03 },
+    { itemId: "spidersilk_robe", chance: 0.03 },
   ],
 };
 
